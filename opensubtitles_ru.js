@@ -33,6 +33,7 @@
     var stremioSubs = [];
     var searchState = 'idle';
     var injectingSubs = false;
+    var nativeSubsSeen = false;
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -534,9 +535,17 @@
             nextIndex = Math.max(nextIndex, parseInt(item.index, 10) + 1 || pos + 1);
         });
 
+        var hasResults = stremioSubs.length > 0;
+        var canShowStatus = nativeSubsSeen && base.length > 0;
+
+        if (!hasResults && !canShowStatus) {
+            logDebug('skip dispatch: nothing to add (native=' + base.length + ' seen=' + nativeSubsSeen + ' state=' + searchState + ')');
+            return;
+        }
+
         var mixed = base.slice();
 
-        if (stremioSubs.length) {
+        if (hasResults) {
             stremioSubs.forEach(function (item) {
                 mixed.push(createSubtitleItem(item, nextIndex++));
             });
@@ -738,16 +747,16 @@
 
         activePlayerId++;
         lastPlayerData = data || {};
-        lastKnownSubs = normalExistingSubs();
+        lastKnownSubs = [];
         stremioSubs = [];
         searchState = 'idle';
+        nativeSubsSeen = false;
 
         renderer.destroy();
 
         setTimeout(function () {
             if (!Lampa.Player || !Lampa.Player.opened || !Lampa.Player.opened()) return;
 
-            lastKnownSubs = normalExistingSubs();
             searchFor(lastPlayerData);
         }, 600);
     }
@@ -758,6 +767,7 @@
         lastPlayerData = null;
         stremioSubs = [];
         searchState = 'idle';
+        nativeSubsSeen = false;
         renderer.destroy();
         network.clear();
     }
@@ -775,6 +785,7 @@
             lastKnownSubs = Array.prototype.slice.call(event.subs).filter(function (item) {
                 return item && !isOurSub(item);
             });
+            nativeSubsSeen = true;
 
             logDebug('captured native subs', lastKnownSubs.length);
 
