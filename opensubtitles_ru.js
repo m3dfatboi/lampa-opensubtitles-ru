@@ -39,7 +39,6 @@
     var nativeSubsSeen = false;
     var manualOverride = null;
     var pendingDisableId = 0;
-    var SHIFT_KEY = PLUGIN_ID + '_shift_ms';
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -367,7 +366,12 @@
 
                 installToPanel();
 
-                if (!anySuccess && lastError && storageBool(PLUGIN_ID + '_debug', false)) {
+                if (manualOverride) {
+                    if (stremioSubs.length) notify('Найдено ' + stremioSubs.length + ' субтитров');
+                    else if (!anySuccess) notify(PLUGIN_TITLE + ': ошибка поиска');
+                    else notify(selectedLanguage().name + ' не найдены для S' + manualOverride.season + 'E' + manualOverride.episode);
+                }
+                else if (!anySuccess && lastError && storageBool(PLUGIN_ID + '_debug', false)) {
                     notify(PLUGIN_TITLE + ': ' + decodeError(lastError));
                 }
             }
@@ -429,55 +433,67 @@
         });
     }
 
-    function actionsItem(index) {
-        var label = '⚙ ' + PLUGIN_TITLE;
+    function disabledItem() {
         var item = {
+            title: 'Отключено',
+            index: -1,
             stremio: true,
             source: 'stremio-opensubtitles',
-            isPicker: true,
-            index: index,
-            language: '',
-            label: label,
-            title: label,
-            selected: false,
-            onSelect: function () { openActionsMenu(); }
+            isDisabled: true
         };
 
-        Object.defineProperty(item, 'mode', {
+        Object.defineProperty(item, 'selected', {
             configurable: true,
-            set: function (value) {
-                if (value === 'showing') {
-                    pendingDisableId++;
-                    openActionsMenu();
+            get: function () {
+                if (renderer.current) return false;
+                for (var i = 0; i < lastKnownSubs.length; i++) {
+                    try {
+                        if (lastKnownSubs[i] && lastKnownSubs[i].selected === true) return false;
+                    }
+                    catch (e) {}
                 }
+                return true;
             },
-            get: function () { return 'disabled'; }
+            set: function () {}
         });
 
         return item;
     }
 
-    function openActionsMenu() {
-        if (!Lampa.Select || !Lampa.Select.show) return;
+    function separatorItem(title) {
+        return {
+            title: title,
+            separator: true,
+            index: -1,
+            stremio: true,
+            source: 'stremio-opensubtitles',
+            selected: false
+        };
+    }
 
-        var items = [];
-
-        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            items.push({ title: 'Поиск по другой серии', method: 'episode' });
-        }
-
-        items.push({ title: 'Задержка субтитров', subtitle: formatShiftLabel(currentShiftMs()), method: 'shift' });
-
-        Lampa.Select.show({
-            title: PLUGIN_TITLE,
-            items: items,
-            nohide: true,
-            onBack: function () {},
-            onSelect: function (a) {
-                if (a.method === 'episode') promptManualOverride();
-                else if (a.method === 'shift') promptShiftDelay();
+    function searchItem() {
+        var item = {
+            title: 'Поиск по другой серии',
+            index: -1,
+            stremio: true,
+            source: 'stremio-opensubtitles',
+            isPicker: true,
+            onSelect: function () {
+                pendingDisableId++;
+                if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
+                    Lampa.PlayerVideo.subsview(true);
+                }
+                promptManualOverride();
             }
+        };
+
+        Object.defineProperty(item, 'selected', {
+            configurable: true,
+            get: function () { return false; },
+            set: function () {}
         });
+
+        return item;
     }
 
     function rangeItems(count, current) {
@@ -502,7 +518,7 @@
             title: 'Выберите сезон',
             items: rangeItems(maxSeason, currentSeason),
             nohide: true,
-            onBack: function () { openActionsMenu(); },
+            onBack: function () {},
             onSelect: function (seasonItem) {
                 Lampa.Select.show({
                     title: 'Сезон ' + seasonItem.value + ' — выберите серию',
@@ -518,48 +534,11 @@
 
                         logDebug('manual override', manualOverride);
 
+                        notify('Поиск ' + selectedLanguage().name + ' для S' + seasonItem.value + 'E' + episodeItem.value + '...');
+
                         if (lastPlayerData) searchFor(lastPlayerData);
                     }
                 });
-            }
-        });
-    }
-
-    function currentShiftMs() {
-        return parseInt(storage(SHIFT_KEY, '0'), 10) || 0;
-    }
-
-    function formatShiftLabel(ms) {
-        if (!ms) return '0';
-        var sign = ms > 0 ? '+' : '−';
-        var abs = Math.abs(ms);
-        var sec = abs / 1000;
-        return sign + (sec % 1 === 0 ? sec : sec.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')) + ' с';
-    }
-
-    function promptShiftDelay() {
-        if (!Lampa.Select || !Lampa.Select.show) return;
-
-        var current = currentShiftMs();
-        var stepsMs = [-5000, -3000, -2000, -1000, -500, -250, -100, 0, 100, 250, 500, 1000, 2000, 3000, 5000];
-
-        var items = stepsMs.map(function (ms) {
-            return {
-                title: ms === 0 ? '0' : (ms > 0 ? '+' : '−') + Math.abs(ms / 1000) + ' с',
-                value: ms,
-                selected: ms === current
-            };
-        });
-
-        Lampa.Select.show({
-            title: 'Задержка (текущая: ' + formatShiftLabel(current) + ')',
-            items: items,
-            nohide: true,
-            onBack: function () { openActionsMenu(); },
-            onSelect: function (a) {
-                Lampa.Storage.set(SHIFT_KEY, a.value);
-                logDebug('shift set to', a.value, 'ms');
-                promptShiftDelay();
             }
         });
     }
@@ -709,14 +688,16 @@
             return;
         }
 
-        var rendererActive = !!renderer.current;
-        if (rendererActive) {
+        if (renderer.current) {
             base.forEach(function (item) {
                 try { item.selected = false; } catch (e) {}
             });
         }
 
-        var mixed = base.slice();
+        var mixed = [];
+        mixed.push(disabledItem());
+
+        base.forEach(function (item) { mixed.push(item); });
 
         if (hasResults) {
             stremioSubs.forEach(function (item) {
@@ -728,7 +709,10 @@
             if (status) mixed.push(status);
         }
 
-        mixed.push(actionsItem(nextIndex++));
+        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
+            mixed.push(separatorItem(PLUGIN_TITLE));
+            mixed.push(searchItem());
+        }
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' state=' + searchState);
 
@@ -789,8 +773,8 @@
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-            var shiftMs = currentShiftMs();
-            var time = video && typeof video.currentTime === 'number' ? video.currentTime * 1000 - shiftMs : 0;
+            var shift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
+            var time = video && typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
             var text = '';
 
             if (!this.current || !this.cues.length) return;
