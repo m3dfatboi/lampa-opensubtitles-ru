@@ -71,6 +71,7 @@
             param: {
                 name: PLUGIN_ID + '_addon_url',
                 type: 'input',
+                values: '',
                 default: DEFAULT_ADDON,
                 placeholder: DEFAULT_ADDON
             },
