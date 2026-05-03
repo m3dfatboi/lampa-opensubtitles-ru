@@ -517,11 +517,39 @@
             logDebug('dispatch error', e && e.message);
         }
 
-        injectingSubs = false;
-
         if (Lampa.PlayerPanel && Lampa.PlayerPanel.setSubs) {
             try { Lampa.PlayerPanel.setSubs(list); } catch (e) {}
         }
+
+        injectingSubs = false;
+    }
+
+    function hookPanelSetSubs() {
+        if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.setSubs) return;
+        if (Lampa.PlayerPanel._opensubtitles_hooked) return;
+
+        var original = Lampa.PlayerPanel.setSubs;
+
+        Lampa.PlayerPanel._opensubtitles_hooked = true;
+        Lampa.PlayerPanel.setSubs = function (list) {
+            var arr = Array.prototype.slice.call(list || []);
+            var nonOurs = arr.filter(function (item) { return item && !isOurSub(item); });
+            var hasOurs = arr.length !== nonOurs.length;
+
+            if (!injectingSubs && !hasOurs) {
+                lastKnownSubs = nonOurs;
+                if (nonOurs.length) nativeSubsSeen = true;
+                logDebug('hook setSubs: captured', nonOurs.length, 'native subs');
+            }
+
+            var result = original.call(this, list);
+
+            if (!injectingSubs && !hasOurs && nonOurs.length && (stremioSubs.length || searchState !== 'idle')) {
+                setTimeout(installToPanel, 0);
+            }
+
+            return result;
+        };
     }
 
     function installToPanel() {
@@ -773,8 +801,12 @@
     }
 
     addSettings();
+    hookPanelSetSubs();
 
-    Lampa.Player.listener.follow('ready', startPlayer);
+    Lampa.Player.listener.follow('ready', function (data) {
+        hookPanelSetSubs();
+        startPlayer(data);
+    });
     Lampa.Player.listener.follow('destroy', destroyPlayer);
 
     if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
