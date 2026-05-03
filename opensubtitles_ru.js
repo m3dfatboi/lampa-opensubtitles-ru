@@ -2,7 +2,22 @@
     'use strict';
 
     var PLUGIN_ID = 'opensubtitles_ru';
+    var PLUGIN_TITLE = 'OpenSubtitles';
     var DEFAULT_ADDON = 'https://opensubtitles-v3.strem.io';
+    var DEFAULT_LANG = 'rus';
+
+    var LANGUAGES = [
+        { code: 'eng', iso2: 'en', name: 'English', aliases: ['english'] },
+        { code: 'rus', iso2: 'ru', name: 'Русский', aliases: ['russian'] },
+        { code: 'spa', iso2: 'es', name: 'Español', aliases: ['spanish'] },
+        { code: 'fre', iso2: 'fr', name: 'Français', aliases: ['fra', 'french'] },
+        { code: 'ger', iso2: 'de', name: 'Deutsch', aliases: ['deu', 'german'] },
+        { code: 'ita', iso2: 'it', name: 'Italiano', aliases: ['italian'] },
+        { code: 'por', iso2: 'pt', name: 'Português', aliases: ['portuguese', 'pob', 'pt-br'] },
+        { code: 'pol', iso2: 'pl', name: 'Polski', aliases: ['polish'] },
+        { code: 'ukr', iso2: 'uk', name: 'Українська', aliases: ['ukrainian'] },
+        { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
+    ];
 
     if (window.openSubtitlesRuPlugin) return;
     window.openSubtitlesRuPlugin = true;
@@ -35,6 +50,48 @@
         else if (Lampa.Bell && Lampa.Bell.push) Lampa.Bell.push({ text: text, icon: settingsIcon });
     }
 
+    function logDebug() {
+        if (window.console && console.log) {
+            try {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('[OpenSubtitles]');
+                console.log.apply(console, args);
+            }
+            catch (e) {}
+        }
+    }
+
+    function findLanguage(code) {
+        code = (code || '').toLowerCase();
+
+        for (var i = 0; i < LANGUAGES.length; i++) {
+            if (LANGUAGES[i].code === code) return LANGUAGES[i];
+        }
+
+        return null;
+    }
+
+    function selectedLanguage() {
+        return findLanguage(storage(PLUGIN_ID + '_lang', DEFAULT_LANG)) || findLanguage(DEFAULT_LANG);
+    }
+
+    function matchesLanguage(rawLang, lang) {
+        if (!lang) return true;
+
+        var normalized = (rawLang || '').toLowerCase().trim().replace(/_/g, '-');
+        var primary = normalized.split('-')[0];
+
+        if (normalized === lang.code || primary === lang.code) return true;
+        if (normalized === lang.iso2 || primary === lang.iso2) return true;
+        if (normalized === lang.name.toLowerCase()) return true;
+
+        for (var i = 0; i < lang.aliases.length; i++) {
+            if (normalized === lang.aliases[i] || primary === lang.aliases[i]) return true;
+        }
+
+        return false;
+    }
+
     function addonBase() {
         var value = (storage(PLUGIN_ID + '_addon_url', DEFAULT_ADDON) || DEFAULT_ADDON).trim();
 
@@ -46,11 +103,21 @@
         return value;
     }
 
+    function languageOptions() {
+        var values = {};
+
+        LANGUAGES.forEach(function (lang) {
+            values[lang.code] = lang.name;
+        });
+
+        return values;
+    }
+
     function addSettings() {
         Lampa.SettingsApi.addComponent({
             component: PLUGIN_ID,
             icon: settingsIcon,
-            name: 'OpenSubtitles RU',
+            name: PLUGIN_TITLE,
             after: 'player'
         });
 
@@ -63,6 +130,19 @@
             },
             field: {
                 name: 'Включить поиск субтитров'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
+                name: PLUGIN_ID + '_lang',
+                type: 'select',
+                values: languageOptions(),
+                default: DEFAULT_LANG
+            },
+            field: {
+                name: 'Язык субтитров'
             }
         });
 
@@ -131,13 +211,13 @@
         network.timeout(10000);
         network.silent(addonBase() + '/manifest.json', function (manifest) {
             if (manifest && manifest.resources && manifest.resources.indexOf('subtitles') >= 0) {
-                notify('OpenSubtitles RU: Stremio addon доступен');
+                notify(PLUGIN_TITLE + ': Stremio addon доступен');
             }
             else {
-                notify('OpenSubtitles RU: addon ответил, но не похож на subtitle-addon');
+                notify(PLUGIN_TITLE + ': addon ответил, но не похож на subtitle-addon');
             }
         }, function (xhr) {
-            notify('OpenSubtitles RU: ' + decodeError(xhr));
+            notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
         });
     }
 
@@ -276,11 +356,20 @@
                 return;
             }
 
+            logDebug('search', request.url);
+
             network.timeout(15000);
             network.silent(request.url, function (json) {
                 if (playerId !== activePlayerId) return;
 
-                stremioSubs = mapStremioResults(json && json.subtitles ? json.subtitles : []);
+                var rawList = json && json.subtitles ? json.subtitles : [];
+
+                logDebug('addon returned', rawList.length, 'items');
+
+                stremioSubs = mapStremioResults(rawList);
+
+                logDebug('after language filter', stremioSubs.length, 'items for', selectedLanguage().code);
+
                 searchState = stremioSubs.length ? 'ready' : 'empty';
                 installToPanel();
             }, function (xhr) {
@@ -290,21 +379,24 @@
                 searchState = 'error';
                 installToPanel();
 
-                if (storageBool(PLUGIN_ID + '_debug', false)) notify('OpenSubtitles RU: ' + decodeError(xhr));
+                logDebug('addon error', xhr && xhr.status, decodeError(xhr));
+
+                if (storageBool(PLUGIN_ID + '_debug', false)) notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
             });
         });
     }
 
     function mapStremioResults(results) {
         var limit = parseInt(storage(PLUGIN_ID + '_limit', '15'), 10) || 15;
+        var lang = selectedLanguage();
         var seen = {};
         var mapped = [];
 
         results.forEach(function (item) {
-            var lang = ((item && item.lang) || '').toLowerCase();
+            var rawLang = (item && (item.lang || item.language || item.SubLanguageID || item.iso639)) || '';
             var url = item && item.url;
 
-            if (!url || (lang !== 'rus' && lang !== 'ru')) return;
+            if (!url || !matchesLanguage(rawLang, lang)) return;
             if (seen[url]) return;
 
             seen[url] = true;
@@ -314,7 +406,8 @@
                 source: 'stremio-opensubtitles',
                 id: item.id || url,
                 url: url,
-                lang: lang,
+                lang: lang.iso2,
+                langCode: lang.code,
                 encoding: item.SubEncoding || item.subEncoding || '',
                 match: item.m || '',
                 score: item.g || ''
@@ -345,12 +438,13 @@
     }
 
     function statusSubtitle(index) {
-        var text = 'OpenSubtitles v3';
+        var lang = selectedLanguage();
+        var text = PLUGIN_TITLE;
 
-        if (searchState === 'searching') text += ': поиск...';
+        if (searchState === 'searching') text += ': поиск ' + lang.name + '...';
         else if (searchState === 'no-imdb') text += ': нет IMDb ID';
         else if (searchState === 'no-episode') text += ': нет сезона/серии';
-        else if (searchState === 'empty') text += ': русские не найдены';
+        else if (searchState === 'empty') text += ': ' + lang.name + ' не найдены';
         else if (searchState === 'error') text += ': ошибка поиска';
         else return null;
 
@@ -358,7 +452,7 @@
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
-            language: 'ru',
+            language: lang.iso2,
             label: text,
             title: text,
             selected: false,
@@ -369,7 +463,7 @@
     }
 
     function createSubtitleItem(item, index) {
-        var parts = ['OpenSubtitles v3', '#' + item.id];
+        var parts = [PLUGIN_TITLE, '#' + item.id];
         var info = [];
 
         if (item.encoding) info.push(item.encoding);
@@ -380,7 +474,7 @@
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
-            language: 'ru',
+            language: item.lang || 'en',
             label: label,
             title: label,
             subtitle: item.url,
@@ -459,7 +553,7 @@
                 self.loading = false;
 
                 if (!self.cues.length) {
-                    notify('OpenSubtitles RU: файл субтитров пустой или не распознан');
+                    notify(PLUGIN_TITLE + ': файл субтитров пустой или не распознан');
                     self.disable();
                     return;
                 }
@@ -468,7 +562,7 @@
             }, function (xhr) {
                 if (self.current !== item) return;
 
-                notify('OpenSubtitles RU: ' + decodeError(xhr));
+                notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
                 self.disable();
             }, false, {
                 dataType: 'text'
