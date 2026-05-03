@@ -4,6 +4,7 @@
     var PLUGIN_ID = 'opensubtitles_ru';
     var PLUGIN_TITLE = 'OpenSubtitles';
     var DEFAULT_ADDON = 'https://opensubtitles-v3.strem.io';
+    var DEFAULT_ADDONS = 'https://opensubtitles-v3.strem.io';
     var DEFAULT_LANG = 'rus';
 
     var LANGUAGES = [
@@ -34,6 +35,7 @@
     var searchState = 'idle';
     var injectingSubs = false;
     var nativeSubsSeen = false;
+    var manualOverride = null;
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -94,8 +96,9 @@
         return false;
     }
 
-    function addonBase() {
-        var value = (storage(PLUGIN_ID + '_addon_url', DEFAULT_ADDON) || DEFAULT_ADDON).trim();
+    function normalizeAddonUrl(value) {
+        value = (value || '').trim();
+        if (!value) return '';
 
         value = value.replace(/\/manifest\.json$/i, '');
         value = value.replace(/\/+$/, '');
@@ -103,6 +106,25 @@
         if (value.indexOf('http') !== 0) value = 'https://' + value;
 
         return value;
+    }
+
+    function addonBase() {
+        return normalizeAddonUrl(storage(PLUGIN_ID + '_addon_url', DEFAULT_ADDON) || DEFAULT_ADDON) || DEFAULT_ADDON;
+    }
+
+    function addonBases() {
+        var raw = storage(PLUGIN_ID + '_addon_urls', '') || '';
+        var legacy = storage(PLUGIN_ID + '_addon_url', '') || '';
+        var combined = (raw + ' ' + legacy).trim();
+        var seen = {};
+        var list = [];
+
+        combined.split(/[\s,;\n]+/).forEach(function (entry) {
+            var url = normalizeAddonUrl(entry);
+            if (url && !seen[url]) { seen[url] = true; list.push(url); }
+        });
+
+        return list.length ? list : [DEFAULT_ADDON];
     }
 
     function languageOptions() {
@@ -151,15 +173,15 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_addon_url',
+                name: PLUGIN_ID + '_addon_urls',
                 type: 'input',
                 values: '',
-                default: DEFAULT_ADDON,
-                placeholder: DEFAULT_ADDON
+                default: DEFAULT_ADDONS,
+                placeholder: DEFAULT_ADDONS
             },
             field: {
-                name: 'Stremio addon URL',
-                description: 'По умолчанию используется OpenSubtitles v3: https://opensubtitles-v3.strem.io'
+                name: 'Stremio addon URLs',
+                description: 'Несколько URL через пробел или запятую. Опрашиваются параллельно, дубликаты по URL фильтруются.'
             }
         });
 
@@ -319,24 +341,32 @@
         });
     }
 
-    function stremioRequest(card, data, imdb) {
-        var episode = parseEpisode(data || {});
+    function stremioRequestId(card, data, imdb) {
         var type = isSeries(card, data) ? 'series' : 'movie';
         var id = imdb;
 
+        if (manualOverride && manualOverride.type) type = manualOverride.type;
         if (!id) return null;
 
         if (type === 'series') {
-            if (!episode.season || !episode.episode) return null;
+            var season = manualOverride && manualOverride.season;
+            var episode = manualOverride && manualOverride.episode;
 
-            id += ':' + episode.season + ':' + episode.episode;
+            if (!season || !episode) {
+                var auto = parseEpisode(data || {});
+                season = season || auto.season;
+                episode = episode || auto.episode;
+            }
+
+            if (!season || !episode) return null;
+            id += ':' + season + ':' + episode;
         }
 
-        return {
-            type: type,
-            id: id,
-            url: addonBase() + '/subtitles/' + type + '/' + encodeURIComponent(id) + '.json'
-        };
+        return { type: type, id: id };
+    }
+
+    function buildAddonUrl(base, type, id) {
+        return base + '/subtitles/' + type + '/' + encodeURIComponent(id) + '.json';
     }
 
     function searchFor(data) {
@@ -350,7 +380,7 @@
         loadImdbIfNeeded(card, data, function (imdb) {
             if (playerId !== activePlayerId) return;
 
-            var request = stremioRequest(card, data, imdb);
+            var request = stremioRequestId(card, data, imdb);
 
             if (!request) {
                 searchState = isSeries(card, data) ? 'no-episode' : 'no-imdb';
@@ -358,33 +388,55 @@
                 return;
             }
 
-            logDebug('search', request.url);
+            var bases = addonBases();
+            var pending = bases.length;
+            var rawList = [];
+            var anySuccess = false;
+            var lastError = null;
 
-            network.timeout(15000);
-            network.silent(request.url, function (json) {
-                if (playerId !== activePlayerId) return;
+            logDebug('search', request.type, request.id, 'across', bases.length, 'addons');
 
-                var rawList = json && json.subtitles ? json.subtitles : [];
+            bases.forEach(function (base) {
+                var url = buildAddonUrl(base, request.type, request.id);
+                var net = new Lampa.Reguest();
 
-                logDebug('addon returned', rawList.length, 'items');
+                net.timeout(15000);
+                net.silent(url, function (json) {
+                    if (playerId !== activePlayerId) return;
 
+                    anySuccess = true;
+                    var items = json && json.subtitles ? json.subtitles : [];
+
+                    items.forEach(function (item) { item._addon = base; });
+                    rawList = rawList.concat(items);
+
+                    logDebug('addon', base, 'returned', items.length);
+
+                    if (--pending === 0) finalize();
+                }, function (xhr) {
+                    if (playerId !== activePlayerId) return;
+
+                    lastError = xhr;
+                    logDebug('addon error', base, xhr && xhr.status);
+
+                    if (--pending === 0) finalize();
+                });
+            });
+
+            function finalize() {
                 stremioSubs = mapStremioResults(rawList);
 
-                logDebug('after language filter', stremioSubs.length, 'items for', selectedLanguage().code);
+                logDebug('merged', rawList.length, '→ filtered', stremioSubs.length, 'for', selectedLanguage().code);
 
-                searchState = stremioSubs.length ? 'ready' : 'empty';
-                installToPanel();
-            }, function (xhr) {
-                if (playerId !== activePlayerId) return;
+                if (!anySuccess) searchState = 'error';
+                else searchState = stremioSubs.length ? 'ready' : 'empty';
 
-                stremioSubs = [];
-                searchState = 'error';
                 installToPanel();
 
-                logDebug('addon error', xhr && xhr.status, decodeError(xhr));
-
-                if (storageBool(PLUGIN_ID + '_debug', false)) notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
-            });
+                if (!anySuccess && lastError && storageBool(PLUGIN_ID + '_debug', false)) {
+                    notify(PLUGIN_TITLE + ': ' + decodeError(lastError));
+                }
+            }
         });
     }
 
@@ -440,6 +492,73 @@
 
         return base.filter(function (item) {
             return item && !isOurSub(item) && item.index !== -1;
+        });
+    }
+
+    function manualPickerItem(index) {
+        var label = PLUGIN_TITLE + ': указать сезон/серию...';
+        var item = {
+            stremio: true,
+            source: 'stremio-opensubtitles',
+            isManualPicker: true,
+            index: index,
+            language: selectedLanguage().iso2,
+            label: label,
+            title: label,
+            selected: false,
+            onSelect: function () { promptManualOverride(); }
+        };
+
+        Object.defineProperty(item, 'mode', {
+            configurable: true,
+            set: function (value) { if (value === 'showing') promptManualOverride(); },
+            get: function () { return 'disabled'; }
+        });
+
+        return item;
+    }
+
+    function promptManualOverride() {
+        if (!Lampa.Input || !Lampa.Input.edit) {
+            notify(PLUGIN_TITLE + ': ввод недоступен');
+            return;
+        }
+
+        var card = activeCard(lastPlayerData);
+        var auto = parseEpisode(lastPlayerData || {});
+        var seasonStart = manualOverride && manualOverride.season ? manualOverride.season : (auto.season || 1);
+        var episodeStart = manualOverride && manualOverride.episode ? manualOverride.episode : (auto.episode || 1);
+
+        Lampa.Input.edit({
+            title: 'Сезон',
+            value: String(seasonStart),
+            free: true,
+            nosave: true,
+            nomic: true
+        }, function (seasonValue) {
+            var season = parseInt(seasonValue, 10) || 0;
+            if (!season) return;
+
+            Lampa.Input.edit({
+                title: 'Серия',
+                value: String(episodeStart),
+                free: true,
+                nosave: true,
+                nomic: true
+            }, function (episodeValue) {
+                var episode = parseInt(episodeValue, 10) || 0;
+                if (!episode) return;
+
+                manualOverride = {
+                    type: 'series',
+                    season: season,
+                    episode: episode
+                };
+
+                logDebug('manual override', manualOverride);
+
+                if (lastPlayerData) searchFor(lastPlayerData);
+            });
         });
     }
 
@@ -564,9 +683,9 @@
         });
 
         var hasResults = stremioSubs.length > 0;
-        var canShowStatus = nativeSubsSeen && base.length > 0;
+        var canAugment = nativeSubsSeen && base.length > 0;
 
-        if (!hasResults && !canShowStatus) {
+        if (!hasResults && !canAugment) {
             logDebug('skip dispatch: nothing to add (native=' + base.length + ' seen=' + nativeSubsSeen + ' state=' + searchState + ')');
             return;
         }
@@ -581,6 +700,10 @@
         else {
             var status = statusSubtitle(nextIndex++);
             if (status) mixed.push(status);
+        }
+
+        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
+            mixed.push(manualPickerItem(nextIndex++));
         }
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' state=' + searchState);
@@ -779,6 +902,7 @@
         stremioSubs = [];
         searchState = 'idle';
         nativeSubsSeen = false;
+        manualOverride = null;
 
         renderer.destroy();
 
@@ -796,6 +920,7 @@
         stremioSubs = [];
         searchState = 'idle';
         nativeSubsSeen = false;
+        manualOverride = null;
         renderer.destroy();
         network.clear();
     }
