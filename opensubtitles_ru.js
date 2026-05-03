@@ -3,9 +3,11 @@
 
     var PLUGIN_ID = 'opensubtitles_ru';
     var PLUGIN_TITLE = 'OpenSubtitles';
-    var DEFAULT_ADDON = 'https://opensubtitles-v3.strem.io';
-    var DEFAULT_ADDONS = 'https://opensubtitles-v3.strem.io';
     var DEFAULT_LANG = 'rus';
+
+    var ADDONS = [
+        'https://opensubtitles-v3.strem.io'
+    ];
 
     var LANGUAGES = [
         { code: 'eng', iso2: 'en', name: 'English', aliases: ['english'] },
@@ -96,35 +98,8 @@
         return false;
     }
 
-    function normalizeAddonUrl(value) {
-        value = (value || '').trim();
-        if (!value) return '';
-
-        value = value.replace(/\/manifest\.json$/i, '');
-        value = value.replace(/\/+$/, '');
-
-        if (value.indexOf('http') !== 0) value = 'https://' + value;
-
-        return value;
-    }
-
-    function addonBase() {
-        return normalizeAddonUrl(storage(PLUGIN_ID + '_addon_url', DEFAULT_ADDON) || DEFAULT_ADDON) || DEFAULT_ADDON;
-    }
-
     function addonBases() {
-        var raw = storage(PLUGIN_ID + '_addon_urls', '') || '';
-        var legacy = storage(PLUGIN_ID + '_addon_url', '') || '';
-        var combined = (raw + ' ' + legacy).trim();
-        var seen = {};
-        var list = [];
-
-        combined.split(/[\s,;\n]+/).forEach(function (entry) {
-            var url = normalizeAddonUrl(entry);
-            if (url && !seen[url]) { seen[url] = true; list.push(url); }
-        });
-
-        return list.length ? list : [DEFAULT_ADDON];
+        return ADDONS.slice();
     }
 
     function languageOptions() {
@@ -173,21 +148,6 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_addon_urls',
-                type: 'input',
-                values: '',
-                default: DEFAULT_ADDONS,
-                placeholder: DEFAULT_ADDONS
-            },
-            field: {
-                name: 'Stremio addon URLs',
-                description: 'Несколько URL через пробел или запятую. Опрашиваются параллельно, дубликаты по URL фильтруются.'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_ID,
-            param: {
                 name: PLUGIN_ID + '_limit',
                 type: 'select',
                 values: {
@@ -214,34 +174,6 @@
             field: {
                 name: 'Показывать ошибки поиска'
             }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_ID,
-            param: {
-                name: PLUGIN_ID + '_check',
-                type: 'button'
-            },
-            field: {
-                name: 'Проверить Stremio addon'
-            },
-            onChange: function () {
-                checkAddon();
-            }
-        });
-    }
-
-    function checkAddon() {
-        network.timeout(10000);
-        network.silent(addonBase() + '/manifest.json', function (manifest) {
-            if (manifest && manifest.resources && manifest.resources.indexOf('subtitles') >= 0) {
-                notify(PLUGIN_TITLE + ': Stremio addon доступен');
-            }
-            else {
-                notify(PLUGIN_TITLE + ': addon ответил, но не похож на subtitle-addon');
-            }
-        }, function (xhr) {
-            notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
         });
     }
 
@@ -495,70 +427,112 @@
         });
     }
 
-    function manualPickerItem(index) {
-        var label = PLUGIN_TITLE + ': указать сезон/серию...';
+    function pickerItem(index, label, action) {
         var item = {
             stremio: true,
             source: 'stremio-opensubtitles',
-            isManualPicker: true,
+            isPicker: true,
             index: index,
             language: selectedLanguage().iso2,
             label: label,
             title: label,
             selected: false,
-            onSelect: function () { promptManualOverride(); }
+            onSelect: action
         };
 
         Object.defineProperty(item, 'mode', {
             configurable: true,
-            set: function (value) { if (value === 'showing') promptManualOverride(); },
+            set: function (value) { if (value === 'showing') action(); },
             get: function () { return 'disabled'; }
         });
 
         return item;
     }
 
+    function rangeItems(count, current) {
+        var items = [];
+        for (var i = 1; i <= count; i++) {
+            items.push({
+                title: String(i),
+                value: i,
+                selected: i === current
+            });
+        }
+        return items;
+    }
+
     function promptManualOverride() {
-        if (!Lampa.Input || !Lampa.Input.edit) {
-            notify(PLUGIN_TITLE + ': ввод недоступен');
+        if (!Lampa.Select || !Lampa.Select.show) {
+            notify(PLUGIN_TITLE + ': меню выбора недоступно');
             return;
         }
 
         var card = activeCard(lastPlayerData);
         var auto = parseEpisode(lastPlayerData || {});
-        var seasonStart = manualOverride && manualOverride.season ? manualOverride.season : (auto.season || 1);
-        var episodeStart = manualOverride && manualOverride.episode ? manualOverride.episode : (auto.episode || 1);
+        var currentSeason = (manualOverride && manualOverride.season) || auto.season || 1;
+        var currentEpisode = (manualOverride && manualOverride.episode) || auto.episode || 1;
+        var maxSeason = Math.max(card && card.number_of_seasons || 0, 25, currentSeason);
+        var maxEpisode = Math.max(currentEpisode + 50, 100);
 
-        Lampa.Input.edit({
+        var enabledController = Lampa.Controller && Lampa.Controller.enabled ? Lampa.Controller.enabled().name : '';
+
+        Lampa.Select.show({
             title: 'Сезон',
-            value: String(seasonStart),
-            free: true,
-            nosave: true,
-            nomic: true
-        }, function (seasonValue) {
-            var season = parseInt(seasonValue, 10) || 0;
-            if (!season) return;
+            items: rangeItems(maxSeason, currentSeason),
+            nohide: true,
+            onBack: function () {
+                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
+            },
+            onSelect: function (seasonItem) {
+                Lampa.Select.show({
+                    title: 'Серия',
+                    items: rangeItems(maxEpisode, currentEpisode),
+                    nohide: true,
+                    onBack: function () { promptManualOverride(); },
+                    onSelect: function (episodeItem) {
+                        manualOverride = {
+                            type: 'series',
+                            season: seasonItem.value,
+                            episode: episodeItem.value
+                        };
 
-            Lampa.Input.edit({
-                title: 'Серия',
-                value: String(episodeStart),
-                free: true,
-                nosave: true,
-                nomic: true
-            }, function (episodeValue) {
-                var episode = parseInt(episodeValue, 10) || 0;
-                if (!episode) return;
+                        logDebug('manual override', manualOverride);
 
-                manualOverride = {
-                    type: 'series',
-                    season: season,
-                    episode: episode
-                };
+                        if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
+                        if (lastPlayerData) searchFor(lastPlayerData);
+                    }
+                });
+            }
+        });
+    }
 
-                logDebug('manual override', manualOverride);
+    function promptShiftDelay() {
+        if (!Lampa.Select || !Lampa.Select.show) return;
 
-                if (lastPlayerData) searchFor(lastPlayerData);
-            });
+        var current = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
+        var values = [-15, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 15];
+        var enabledController = Lampa.Controller && Lampa.Controller.enabled ? Lampa.Controller.enabled().name : '';
+
+        var items = values.map(function (v) {
+            return {
+                title: (v > 0 ? '+' : '') + v + ' сек',
+                value: v,
+                selected: v === current
+            };
+        });
+
+        Lampa.Select.show({
+            title: 'Задержка субтитров',
+            items: items,
+            nohide: true,
+            onBack: function () {
+                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
+            },
+            onSelect: function (a) {
+                Lampa.Storage.set('player_subs_shift_time', a.value);
+
+                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
+            }
         });
     }
 
@@ -703,8 +677,10 @@
         }
 
         if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            mixed.push(manualPickerItem(nextIndex++));
+            mixed.push(pickerItem(nextIndex++, PLUGIN_TITLE + ': указать сезон/серию...', promptManualOverride));
         }
+
+        mixed.push(pickerItem(nextIndex++, PLUGIN_TITLE + ': задержка субтитров...', promptShiftDelay));
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' state=' + searchState);
 
@@ -778,10 +754,8 @@
                 }
             }
 
-            if (this.lastText !== text) {
-                this.lastText = text;
-                showSubtitleText(text);
-            }
+            this.lastText = text;
+            showSubtitleText(text);
         },
         disable: function (clearText) {
             clearInterval(this.timer);
@@ -802,20 +776,18 @@
         }
     };
 
-    function subtitleBox() {
-        if (!Lampa.PlayerVideo || !Lampa.PlayerVideo.render) return $();
-
-        return Lampa.PlayerVideo.render().find('.player-video__subtitles > div');
-    }
-
     function showSubtitleText(text) {
-        var box = subtitleBox();
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+        if (!video || typeof video.dispatchEvent !== 'function') return;
 
-        if (!box.length) return;
-
-        box.html(text || '&nbsp;').css({
-            display: text ? 'inline-block' : 'none'
-        });
+        try {
+            var event = new Event('subtitle');
+            event.text = text || '';
+            video.dispatchEvent(event);
+        }
+        catch (e) {
+            logDebug('subtitle dispatch error', e && e.message);
+        }
     }
 
     function parseSubtitles(raw) {
