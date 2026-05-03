@@ -38,6 +38,8 @@
     var injectingSubs = false;
     var nativeSubsSeen = false;
     var manualOverride = null;
+    var pendingDisableId = 0;
+    var SHIFT_KEY = PLUGIN_ID + '_shift_ms';
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -427,45 +429,67 @@
         });
     }
 
-    function pickerItem(index, label, action) {
+    function actionsItem(index) {
+        var label = '⚙ ' + PLUGIN_TITLE;
         var item = {
             stremio: true,
             source: 'stremio-opensubtitles',
             isPicker: true,
             index: index,
-            language: selectedLanguage().iso2,
+            language: '',
             label: label,
             title: label,
             selected: false,
-            onSelect: action
+            onSelect: function () { openActionsMenu(); }
         };
 
         Object.defineProperty(item, 'mode', {
             configurable: true,
-            set: function (value) { if (value === 'showing') action(); },
+            set: function (value) {
+                if (value === 'showing') {
+                    pendingDisableId++;
+                    openActionsMenu();
+                }
+            },
             get: function () { return 'disabled'; }
         });
 
         return item;
     }
 
+    function openActionsMenu() {
+        if (!Lampa.Select || !Lampa.Select.show) return;
+
+        var items = [];
+
+        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
+            items.push({ title: 'Поиск по другой серии', method: 'episode' });
+        }
+
+        items.push({ title: 'Задержка субтитров', subtitle: formatShiftLabel(currentShiftMs()), method: 'shift' });
+
+        Lampa.Select.show({
+            title: PLUGIN_TITLE,
+            items: items,
+            nohide: true,
+            onBack: function () {},
+            onSelect: function (a) {
+                if (a.method === 'episode') promptManualOverride();
+                else if (a.method === 'shift') promptShiftDelay();
+            }
+        });
+    }
+
     function rangeItems(count, current) {
         var items = [];
         for (var i = 1; i <= count; i++) {
-            items.push({
-                title: String(i),
-                value: i,
-                selected: i === current
-            });
+            items.push({ title: String(i), value: i, selected: i === current });
         }
         return items;
     }
 
     function promptManualOverride() {
-        if (!Lampa.Select || !Lampa.Select.show) {
-            notify(PLUGIN_TITLE + ': меню выбора недоступно');
-            return;
-        }
+        if (!Lampa.Select || !Lampa.Select.show) return;
 
         var card = activeCard(lastPlayerData);
         var auto = parseEpisode(lastPlayerData || {});
@@ -474,18 +498,14 @@
         var maxSeason = Math.max(card && card.number_of_seasons || 0, 25, currentSeason);
         var maxEpisode = Math.max(currentEpisode + 50, 100);
 
-        var enabledController = Lampa.Controller && Lampa.Controller.enabled ? Lampa.Controller.enabled().name : '';
-
         Lampa.Select.show({
-            title: 'Сезон',
+            title: 'Выберите сезон',
             items: rangeItems(maxSeason, currentSeason),
             nohide: true,
-            onBack: function () {
-                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
-            },
+            onBack: function () { openActionsMenu(); },
             onSelect: function (seasonItem) {
                 Lampa.Select.show({
-                    title: 'Серия',
+                    title: 'Сезон ' + seasonItem.value + ' — выберите серию',
                     items: rangeItems(maxEpisode, currentEpisode),
                     nohide: true,
                     onBack: function () { promptManualOverride(); },
@@ -498,7 +518,6 @@
 
                         logDebug('manual override', manualOverride);
 
-                        if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
                         if (lastPlayerData) searchFor(lastPlayerData);
                     }
                 });
@@ -506,32 +525,41 @@
         });
     }
 
+    function currentShiftMs() {
+        return parseInt(storage(SHIFT_KEY, '0'), 10) || 0;
+    }
+
+    function formatShiftLabel(ms) {
+        if (!ms) return '0';
+        var sign = ms > 0 ? '+' : '−';
+        var abs = Math.abs(ms);
+        var sec = abs / 1000;
+        return sign + (sec % 1 === 0 ? sec : sec.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')) + ' с';
+    }
+
     function promptShiftDelay() {
         if (!Lampa.Select || !Lampa.Select.show) return;
 
-        var current = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
-        var values = [-15, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 15];
-        var enabledController = Lampa.Controller && Lampa.Controller.enabled ? Lampa.Controller.enabled().name : '';
+        var current = currentShiftMs();
+        var stepsMs = [-5000, -3000, -2000, -1000, -500, -250, -100, 0, 100, 250, 500, 1000, 2000, 3000, 5000];
 
-        var items = values.map(function (v) {
+        var items = stepsMs.map(function (ms) {
             return {
-                title: (v > 0 ? '+' : '') + v + ' сек',
-                value: v,
-                selected: v === current
+                title: ms === 0 ? '0' : (ms > 0 ? '+' : '−') + Math.abs(ms / 1000) + ' с',
+                value: ms,
+                selected: ms === current
             };
         });
 
         Lampa.Select.show({
-            title: 'Задержка субтитров',
+            title: 'Задержка (текущая: ' + formatShiftLabel(current) + ')',
             items: items,
             nohide: true,
-            onBack: function () {
-                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
-            },
+            onBack: function () { openActionsMenu(); },
             onSelect: function (a) {
-                Lampa.Storage.set('player_subs_shift_time', a.value);
-
-                if (enabledController && Lampa.Controller) Lampa.Controller.toggle(enabledController);
+                Lampa.Storage.set(SHIFT_KEY, a.value);
+                logDebug('shift set to', a.value, 'ms');
+                promptShiftDelay();
             }
         });
     }
@@ -577,21 +605,38 @@
             label: label,
             title: label,
             subtitle: item.url,
-            selected: false,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
             }
         };
 
+        Object.defineProperty(sub, 'selected', {
+            configurable: true,
+            set: function () {},
+            get: function () {
+                return Boolean(renderer.current && renderer.current.url === sub.url);
+            }
+        });
+
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (value === 'showing') renderer.select(sub);
-                else if (renderer.current === sub) renderer.disable();
+                if (value === 'showing') {
+                    pendingDisableId++;
+                    renderer.select(sub);
+                }
+                else if (renderer.current && renderer.current.url === sub.url) {
+                    var disableId = ++pendingDisableId;
+                    setTimeout(function () {
+                        if (disableId === pendingDisableId && renderer.current && renderer.current.url === sub.url) {
+                            renderer.disable();
+                        }
+                    }, 50);
+                }
             },
             get: function () {
-                return renderer.current === sub ? 'showing' : 'disabled';
+                return renderer.current && renderer.current.url === sub.url ? 'showing' : 'disabled';
             }
         });
 
@@ -664,6 +709,13 @@
             return;
         }
 
+        var rendererActive = !!renderer.current;
+        if (rendererActive) {
+            base.forEach(function (item) {
+                try { item.selected = false; } catch (e) {}
+            });
+        }
+
         var mixed = base.slice();
 
         if (hasResults) {
@@ -676,11 +728,7 @@
             if (status) mixed.push(status);
         }
 
-        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            mixed.push(pickerItem(nextIndex++, PLUGIN_TITLE + ': указать сезон/серию...', promptManualOverride));
-        }
-
-        mixed.push(pickerItem(nextIndex++, PLUGIN_TITLE + ': задержка субтитров...', promptShiftDelay));
+        mixed.push(actionsItem(nextIndex++));
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' state=' + searchState);
 
@@ -741,8 +789,8 @@
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-            var shift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
-            var time = video && typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
+            var shiftMs = currentShiftMs();
+            var time = video && typeof video.currentTime === 'number' ? video.currentTime * 1000 - shiftMs : 0;
             var text = '';
 
             if (!this.current || !this.cues.length) return;
