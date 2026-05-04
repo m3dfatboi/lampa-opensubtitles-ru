@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v9-original-title';
+    var PLUGIN_VERSION = 'v10-original-title-inline';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -1421,15 +1421,16 @@
 
         if (!origTitle || origTitle === displayTitle) return;
 
-        var titleEl = body.find('.full-start-new__title').first();
-        if (!titleEl.length) titleEl = body.find('.full-start__title').first();
-        if (!titleEl.length) return;
+        body.find('.opensub-original-title-row').remove();
 
-        body.find('.opensub-original-title').remove();
+        var details = body.find('.full-start-new__details').first();
+        if (!details.length) return;
 
-        var origEl = $('<div class="opensub-original-title full-start-new__details" style="margin-top: 0.4em;"></div>');
-        origEl.text(origTitle);
-        titleEl.after(origEl);
+        var titleSpan = $('<span class="opensub-original-title-row"></span>').text(origTitle);
+        var separator = $('<span class="full-start-new__split opensub-original-title-row">●</span>');
+
+        details.prepend(separator);
+        details.prepend(titleSpan);
     }
 
     if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
