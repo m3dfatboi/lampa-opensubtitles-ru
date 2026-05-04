@@ -569,13 +569,7 @@
     }
 
     function createSubtitleItem(item, index) {
-        var parts = [PLUGIN_TITLE, '#' + item.id];
-        var info = [];
-
-        if (item.encoding) info.push(item.encoding);
-        if (item.score) info.push('score: ' + item.score);
-
-        var label = parts.join(' / ') + (info.length ? ' / ' + info.join(' / ') : '');
+        var label = PLUGIN_TITLE;
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -728,7 +722,12 @@
         select: function (item) {
             var self = this;
 
-            if (self.current === item && (self.loading || self.cues.length)) return;
+            logDebug('renderer.select', item && item.url);
+
+            if (self.current === item && (self.loading || self.cues.length)) {
+                logDebug('renderer.select skipped: already current');
+                return;
+            }
 
             self.disable(false);
             self.current = item;
@@ -740,10 +739,15 @@
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.url, function (text) {
-                if (self.current !== item) return;
+                if (self.current !== item) {
+                    logDebug('renderer.select fetch ignored: current changed');
+                    return;
+                }
 
                 self.cues = parseSubtitles(text || '');
                 self.loading = false;
+
+                logDebug('renderer.select parsed', self.cues.length, 'cues from', (text || '').length, 'chars');
 
                 if (!self.cues.length) {
                     notify(PLUGIN_TITLE + ': файл субтитров пустой или не распознан');
@@ -755,6 +759,7 @@
             }, function (xhr) {
                 if (self.current !== item) return;
 
+                logDebug('renderer.select fetch error', xhr && xhr.status);
                 notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
                 self.disable();
             }, false, {
@@ -763,6 +768,8 @@
         },
         start: function () {
             var self = this;
+
+            logDebug('renderer.start: timer fires every 200ms');
 
             clearInterval(self.timer);
             self.timer = setInterval(function () {
@@ -790,6 +797,10 @@
             showSubtitleText(text);
         },
         disable: function (clearText) {
+            if (this.current || this.cues.length || this.loading) {
+                logDebug('renderer.disable', this.current && this.current.url);
+            }
+
             clearInterval(this.timer);
             subtitleNetwork.clear();
 
