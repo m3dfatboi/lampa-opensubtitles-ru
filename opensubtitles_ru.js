@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v7-always-show-subs-button';
+    var PLUGIN_VERSION = 'v8-controller-cascade';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -778,10 +778,30 @@
     }
 
     function returnToController(name) {
-        if (!Lampa.Controller || !name || name === 'select') return;
+        if (!Lampa.Controller) return;
 
-        try { Lampa.Controller.toggle(name); }
-        catch (e) { logDebug('Controller.toggle failed for', name, e && e.message); }
+        var candidates = [name, 'player_panel', 'player', 'content'].filter(function (n) {
+            return n && n !== 'select';
+        });
+
+        for (var i = 0; i < candidates.length; i++) {
+            var target = candidates[i];
+            try {
+                Lampa.Controller.toggle(target);
+            }
+            catch (e) {
+                logDebug('Controller.toggle threw for', target, e && e.message);
+                continue;
+            }
+
+            try {
+                var nowName = Lampa.Controller.enabled && Lampa.Controller.enabled().name;
+                if (nowName && nowName !== 'select') return;
+            }
+            catch (e) {}
+        }
+
+        logDebug('returnToController: no target accepted, last try was', candidates[candidates.length - 1]);
     }
 
     function captureController() {
@@ -1000,10 +1020,16 @@
             logDebug('hookSubsviewSignal: no Lampa.PlayerPanel.listener available');
             return;
         }
-        if (Lampa.PlayerPanel._opensub_subsview_version === PLUGIN_VERSION) return;
 
-        Lampa.PlayerPanel._opensub_subsview_version = PLUGIN_VERSION;
-        Lampa.PlayerPanel.listener.follow('subsview', function (event) {
+        var bus = Lampa.PlayerPanel.listener;
+        var prev = Lampa.PlayerPanel._opensub_subsview_listener;
+
+        if (prev && typeof bus.remove === 'function') {
+            try { bus.remove('subsview', prev); }
+            catch (e) {}
+        }
+
+        var listenerFn = function (event) {
             logDebug('subsview event fired status=' + (event && event.status) + ' actionPicked=' + actionWasPicked);
 
             if (actionWasPicked) return;
@@ -1037,7 +1063,11 @@
                     renderer.disable();
                 }
             }, 0);
-        });
+        };
+
+        bus.follow('subsview', listenerFn);
+        Lampa.PlayerPanel._opensub_subsview_listener = listenerFn;
+        Lampa.PlayerPanel._opensub_subsview_version = PLUGIN_VERSION;
 
         logDebug('hookSubsviewSignal: installed');
     }
@@ -1399,7 +1429,14 @@
     Lampa.Player.listener.follow('destroy', destroyPlayer);
 
     if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
-        Lampa.PlayerVideo.listener.follow('subs', function (event) {
+        var bus = Lampa.PlayerVideo.listener;
+        var prev = Lampa.PlayerVideo._opensub_subs_listener;
+
+        if (prev && typeof bus.remove === 'function') {
+            try { bus.remove('subs', prev); } catch (e) {}
+        }
+
+        var subsListener = function (event) {
             if (injectingSubs) return;
             if (!event || !event.subs) return;
 
@@ -1413,6 +1450,9 @@
             if (stremioSubs.length || searchState !== 'idle') {
                 setTimeout(installToPanel, 0);
             }
-        });
+        };
+
+        bus.follow('subs', subsListener);
+        Lampa.PlayerVideo._opensub_subs_listener = subsListener;
     }
 })();
