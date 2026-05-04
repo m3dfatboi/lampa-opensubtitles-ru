@@ -435,22 +435,41 @@
     }
 
     function disabledItem() {
-        var hasNativeSel = false;
-        for (var i = 0; i < lastKnownSubs.length; i++) {
-            try {
-                if (lastKnownSubs[i] && lastKnownSubs[i].selected === true) { hasNativeSel = true; break; }
-            }
-            catch (e) {}
-        }
-
-        return {
+        var item = {
             title: 'Отключено',
             index: -1,
-            selected: !renderer.current && !hasNativeSel,
             stremio: true,
             source: 'stremio-opensubtitles',
             isDisabled: true
         };
+
+        Object.defineProperty(item, 'selected', {
+            configurable: true,
+            set: function () {},
+            get: function () {
+                if (renderer.current) return false;
+                for (var i = 0; i < lastKnownSubs.length; i++) {
+                    try {
+                        if (lastKnownSubs[i] && lastKnownSubs[i].selected === true) return false;
+                    }
+                    catch (e) {}
+                }
+                return true;
+            }
+        });
+
+        Object.defineProperty(item, 'mode', {
+            configurable: true,
+            set: function (value) {
+                if (value === 'showing' && renderer.current) {
+                    logDebug('disabled picked: stopping renderer');
+                    renderer.disable();
+                }
+            },
+            get: function () { return ''; }
+        });
+
+        return item;
     }
 
     function separatorItem(title) {
