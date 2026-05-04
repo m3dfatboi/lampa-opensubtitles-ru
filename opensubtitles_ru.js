@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v5-legacy-rest';
+    var PLUGIN_VERSION = 'v6-iso3-controller-restore';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -568,7 +568,7 @@
                 source: 'stremio-opensubtitles',
                 id: item.id || url,
                 url: url,
-                lang: lang.iso2,
+                lang: lang.code,
                 langCode: lang.code,
                 encoding: item.SubEncoding || item.subEncoding || '',
                 match: item.m || '',
@@ -611,7 +611,7 @@
         return {
             url: item.url,
             label: label,
-            language: item.lang || lang.iso2
+            language: item.lang || lang.code
         };
     }
 
@@ -777,17 +777,31 @@
         return items;
     }
 
-    function returnController() {
-        if (!Lampa.Controller) return;
+    function returnToController(name) {
+        if (!Lampa.Controller || !name || name === 'select') return;
 
-        var name = 'player_panel';
-        if (Lampa.Platform && Lampa.Platform.screen && Lampa.Platform.screen('mobile')) name = 'player';
-
-        Lampa.Controller.toggle(name);
+        try { Lampa.Controller.toggle(name); }
+        catch (e) { logDebug('Controller.toggle failed for', name, e && e.message); }
     }
 
-    function promptManualOverride() {
+    function captureController() {
+        if (!Lampa.Controller || !Lampa.Controller.enabled) return 'player_panel';
+
+        try {
+            var current = Lampa.Controller.enabled();
+            var name = current && current.name;
+            if (name && name !== 'select') return name;
+        }
+        catch (e) {}
+
+        if (Lampa.Platform && Lampa.Platform.screen && Lampa.Platform.screen('mobile')) return 'player';
+        return 'player_panel';
+    }
+
+    function promptManualOverride(prevController) {
         if (!Lampa.Select || !Lampa.Select.show) return;
+
+        if (!prevController) prevController = captureController();
 
         var card = activeCard(lastPlayerData);
         var auto = parseEpisode(lastPlayerData || {});
@@ -799,14 +813,14 @@
         Lampa.Select.show({
             title: 'Выберите сезон',
             items: rangeItems(maxSeason, currentSeason),
-            onBack: returnController,
+            onBack: function () { returnToController(prevController); },
             onSelect: function (seasonItem) {
                 Lampa.Select.show({
                     title: 'Сезон ' + seasonItem.value + ' — выберите серию',
                     items: rangeItems(maxEpisode, currentEpisode),
-                    onBack: function () { promptManualOverride(); },
+                    onBack: function () { promptManualOverride(prevController); },
                     onSelect: function (episodeItem) {
-                        returnController();
+                        returnToController(prevController);
 
                         manualOverride = {
                             type: 'series',
@@ -836,7 +850,7 @@
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
-            language: lang.iso2,
+            language: lang.code,
             label: text,
             title: text,
             selected: false,
@@ -851,7 +865,7 @@
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
-            language: item.lang || 'en',
+            language: item.lang || selectedLanguage().code,
             label: PLUGIN_TITLE,
             title: PLUGIN_TITLE,
             url: item.url,
