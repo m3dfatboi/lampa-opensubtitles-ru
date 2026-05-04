@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v4-android-external-no-empty';
+    var PLUGIN_VERSION = 'v5-legacy-rest';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -319,6 +319,37 @@
         return base + '/subtitles/' + type + '/' + encodeURIComponent(id) + '.json';
     }
 
+    function buildRestUrl(type, id, langCode) {
+        var parts = id.split(':');
+        var imdbDigits = parts[0].replace(/^tt/i, '');
+
+        if (type === 'series' && parts.length >= 3) {
+            return 'https://rest.opensubtitles.org/search/episode-' + parts[2] +
+                '/imdbid-' + imdbDigits +
+                '/season-' + parts[1] +
+                '/sublanguageid-' + langCode;
+        }
+        return 'https://rest.opensubtitles.org/search/imdbid-' + imdbDigits + '/sublanguageid-' + langCode;
+    }
+
+    function mapRestItems(items) {
+        if (!items || !items.length) return [];
+        var mapped = [];
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            if (!item || !item.IDSubtitleFile) continue;
+            mapped.push({
+                id: item.IDSubtitle || item.IDSubtitleFile,
+                url: 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile,
+                lang: item.SubLanguageID || '',
+                SubEncoding: 'utf-8',
+                m: 'i',
+                g: String(parseInt(item.SubDownloadsCnt, 10) || 0)
+            });
+        }
+        return mapped;
+    }
+
     function searchFor(data) {
         var playerId = activePlayerId;
         var card = activeCard(data);
@@ -339,12 +370,13 @@
             }
 
             var bases = addonBases();
-            var pending = bases.length;
+            var lang = selectedLanguage();
+            var pending = bases.length + 1;
             var rawList = [];
             var anySuccess = false;
             var lastError = null;
 
-            logDebug('search', request.type, request.id, 'across', bases.length, 'addons');
+            logDebug('search', request.type, request.id, 'across', bases.length, 'addons + rest.opensubtitles.org');
 
             bases.forEach(function (base) {
                 var url = buildAddonUrl(base, request.type, request.id);
@@ -372,6 +404,31 @@
                     if (--pending === 0) finalize();
                 });
             });
+
+            (function fetchRest() {
+                var url = buildRestUrl(request.type, request.id, lang.code);
+                var net = new Lampa.Reguest();
+
+                net.timeout(15000);
+                net.silent(url, function (items) {
+                    if (playerId !== activePlayerId) return;
+
+                    anySuccess = true;
+                    var mapped = mapRestItems(items);
+                    rawList = rawList.concat(mapped);
+
+                    logDebug('rest.opensubtitles.org returned', mapped.length, 'items for', lang.code);
+
+                    if (--pending === 0) finalize();
+                }, function (xhr) {
+                    if (playerId !== activePlayerId) return;
+
+                    lastError = lastError || xhr;
+                    logDebug('rest.opensubtitles.org error', xhr && xhr.status);
+
+                    if (--pending === 0) finalize();
+                });
+            })();
 
             function finalize() {
                 stremioSubs = mapStremioResults(rawList);
@@ -419,7 +476,16 @@
         loadImdbIfNeeded(card, data, function (imdb) {
             if (finished) return;
 
-            var request = stremioRequestId(card, data, imdb);
+            var savedManualOverride = manualOverride;
+            var request;
+
+            try {
+                manualOverride = null;
+                request = stremioRequestId(card, data, imdb);
+            }
+            finally {
+                manualOverride = savedManualOverride;
+            }
 
             if (!request) {
                 finish([], isSeries(card, data) ? 'no-episode' : 'no-imdb');
@@ -427,7 +493,8 @@
             }
 
             var bases = addonBases();
-            var pending = bases.length;
+            var lang = selectedLanguage();
+            var pending = bases.length + 1;
             var rawList = [];
             var anySuccess = false;
 
@@ -437,12 +504,7 @@
                 finish(mapped, anySuccess ? (mapped.length ? 'ready' : 'empty') : 'error');
             }
 
-            if (!pending) {
-                finish([], 'empty');
-                return;
-            }
-
-            logDebug('external android: search', request.type, request.id, 'across', bases.length, 'addons');
+            logDebug('external android: search', request.type, request.id, 'across', bases.length, 'addons + rest.opensubtitles.org');
 
             bases.forEach(function (base) {
                 var url = buildAddonUrl(base, request.type, request.id);
@@ -456,17 +518,33 @@
                     anySuccess = true;
                     rawList = rawList.concat(json && json.subtitles ? json.subtitles : []);
 
-                    if (--pending === 0) {
-                        finalize();
-                    }
+                    if (--pending === 0) finalize();
                 }, function () {
                     if (finished) return;
 
-                    if (--pending === 0) {
-                        finalize();
-                    }
+                    if (--pending === 0) finalize();
                 });
             });
+
+            (function fetchRest() {
+                var url = buildRestUrl(request.type, request.id, lang.code);
+                var net = new Lampa.Reguest();
+
+                nets.push(net);
+                net.timeout(EXTERNAL_SEARCH_TIMEOUT);
+                net.silent(url, function (items) {
+                    if (finished) return;
+
+                    anySuccess = true;
+                    rawList = rawList.concat(mapRestItems(items));
+
+                    if (--pending === 0) finalize();
+                }, function () {
+                    if (finished) return;
+
+                    if (--pending === 0) finalize();
+                });
+            })();
         });
     }
 
