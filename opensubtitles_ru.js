@@ -504,6 +504,15 @@
         return items;
     }
 
+    function returnController() {
+        if (!Lampa.Controller) return;
+
+        var name = 'player_panel';
+        if (Lampa.Platform && Lampa.Platform.screen && Lampa.Platform.screen('mobile')) name = 'player';
+
+        Lampa.Controller.toggle(name);
+    }
+
     function promptManualOverride() {
         if (!Lampa.Select || !Lampa.Select.show) return;
 
@@ -517,15 +526,15 @@
         Lampa.Select.show({
             title: 'Выберите сезон',
             items: rangeItems(maxSeason, currentSeason),
-            nohide: true,
-            onBack: function () {},
+            onBack: returnController,
             onSelect: function (seasonItem) {
                 Lampa.Select.show({
                     title: 'Сезон ' + seasonItem.value + ' — выберите серию',
                     items: rangeItems(maxEpisode, currentEpisode),
-                    nohide: true,
                     onBack: function () { promptManualOverride(); },
                     onSelect: function (episodeItem) {
+                        returnController();
+
                         manualOverride = {
                             type: 'series',
                             season: seasonItem.value,
@@ -569,7 +578,11 @@
     }
 
     function createSubtitleItem(item, index) {
-        var label = PLUGIN_TITLE;
+        var info = [];
+        if (item.id) info.push('#' + item.id);
+        if (item.score) info.push('rank ' + item.score);
+
+        var label = info.join(' ');
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -577,7 +590,6 @@
             language: item.lang || 'en',
             label: label,
             title: label,
-            subtitle: item.url,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
