@@ -22,10 +22,13 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    if (window.openSubtitlesRuPlugin) return;
-    window.openSubtitlesRuPlugin = true;
+    var PLUGIN_VERSION = 'v2-subsview-hook-2';
 
     if (!window.Lampa) return;
+
+    if (window.console && window.console.log) {
+        try { console.log('[OpenSubtitles]', 'plugin source loaded', PLUGIN_VERSION); } catch (e) {}
+    }
 
     var Lampa = window.Lampa;
     var network = new Lampa.Reguest();
@@ -655,12 +658,11 @@
 
     function hookPanelSetSubs() {
         if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.setSubs) return;
-        if (Lampa.PlayerPanel._opensubtitles_hooked) return;
+        if (Lampa.PlayerPanel.setSubs._opensub_version === PLUGIN_VERSION) return;
 
         var original = Lampa.PlayerPanel.setSubs;
 
-        Lampa.PlayerPanel._opensubtitles_hooked = true;
-        Lampa.PlayerPanel.setSubs = function (list) {
+        var wrapper = function (list) {
             var arr = Array.prototype.slice.call(list || []);
             latestPanelSubs = arr;
 
@@ -681,6 +683,11 @@
 
             return result;
         };
+
+        wrapper._opensub_version = PLUGIN_VERSION;
+        Lampa.PlayerPanel.setSubs = wrapper;
+
+        logDebug('hookPanelSetSubs: installed', PLUGIN_VERSION);
     }
 
     function hookVideoSubsview() {
@@ -688,12 +695,11 @@
             logDebug('hookVideoSubsview: Lampa.PlayerVideo.subsview not available');
             return;
         }
-        if (Lampa.PlayerVideo._opensubtitles_subsview_hooked) return;
+        if (Lampa.PlayerVideo.subsview._opensub_version === PLUGIN_VERSION) return;
 
         var original = Lampa.PlayerVideo.subsview;
-        Lampa.PlayerVideo._opensubtitles_subsview_hooked = true;
 
-        Lampa.PlayerVideo.subsview = function (status) {
+        var wrapper = function (status) {
             logDebug('Lampa.PlayerVideo.subsview status=' + status + ' actionPicked=' + actionWasPicked + ' rendererActive=' + (!!renderer.current));
 
             if (status === false && renderer.current && !actionWasPicked) {
@@ -725,7 +731,10 @@
             return original.call(this, status);
         };
 
-        logDebug('hookVideoSubsview: installed');
+        wrapper._opensub_version = PLUGIN_VERSION;
+        Lampa.PlayerVideo.subsview = wrapper;
+
+        logDebug('hookVideoSubsview: installed', PLUGIN_VERSION);
     }
 
     function hookSubsviewSignal() {
@@ -733,9 +742,9 @@
             logDebug('hookSubsviewSignal: no Lampa.PlayerPanel.listener available');
             return;
         }
-        if (Lampa.PlayerPanel._opensubtitles_subsview_hooked) return;
+        if (Lampa.PlayerPanel._opensub_subsview_version === PLUGIN_VERSION) return;
 
-        Lampa.PlayerPanel._opensubtitles_subsview_hooked = true;
+        Lampa.PlayerPanel._opensub_subsview_version = PLUGIN_VERSION;
         Lampa.PlayerPanel.listener.follow('subsview', function (event) {
             logDebug('subsview event fired status=' + (event && event.status) + ' actionPicked=' + actionWasPicked);
 
