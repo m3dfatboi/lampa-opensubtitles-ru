@@ -38,7 +38,8 @@
     var injectingSubs = false;
     var nativeSubsSeen = false;
     var manualOverride = null;
-    var pendingDisableId = 0;
+    var actionWasPicked = false;
+    var latestPanelSubs = [];
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -434,30 +435,22 @@
     }
 
     function disabledItem() {
-        var item = {
+        var hasNativeSel = false;
+        for (var i = 0; i < lastKnownSubs.length; i++) {
+            try {
+                if (lastKnownSubs[i] && lastKnownSubs[i].selected === true) { hasNativeSel = true; break; }
+            }
+            catch (e) {}
+        }
+
+        return {
             title: 'Отключено',
             index: -1,
+            selected: !renderer.current && !hasNativeSel,
             stremio: true,
             source: 'stremio-opensubtitles',
             isDisabled: true
         };
-
-        Object.defineProperty(item, 'selected', {
-            configurable: true,
-            get: function () {
-                if (renderer.current) return false;
-                for (var i = 0; i < lastKnownSubs.length; i++) {
-                    try {
-                        if (lastKnownSubs[i] && lastKnownSubs[i].selected === true) return false;
-                    }
-                    catch (e) {}
-                }
-                return true;
-            },
-            set: function () {}
-        });
-
-        return item;
     }
 
     function separatorItem(title) {
@@ -479,7 +472,6 @@
             source: 'stremio-opensubtitles',
             isPicker: true,
             onSelect: function () {
-                pendingDisableId++;
                 if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
                     Lampa.PlayerVideo.subsview(true);
                 }
@@ -491,6 +483,17 @@
             configurable: true,
             get: function () { return false; },
             set: function () {}
+        });
+
+        Object.defineProperty(item, 'mode', {
+            configurable: true,
+            set: function (value) {
+                if (value === 'showing') {
+                    actionWasPicked = true;
+                    setTimeout(function () { actionWasPicked = false; }, 200);
+                }
+            },
+            get: function () { return 'disabled'; }
         });
 
         return item;
@@ -578,18 +581,13 @@
     }
 
     function createSubtitleItem(item, index) {
-        var info = [];
-        if (item.id) info.push('#' + item.id);
-        if (item.score) info.push('rank ' + item.score);
-
-        var label = info.join(' ');
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
             language: item.lang || 'en',
-            label: label,
-            title: label,
+            label: PLUGIN_TITLE,
+            title: PLUGIN_TITLE,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
@@ -607,18 +605,7 @@
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (value === 'showing') {
-                    pendingDisableId++;
-                    renderer.select(sub);
-                }
-                else if (renderer.current && renderer.current.url === sub.url) {
-                    var disableId = ++pendingDisableId;
-                    setTimeout(function () {
-                        if (disableId === pendingDisableId && renderer.current && renderer.current.url === sub.url) {
-                            renderer.disable();
-                        }
-                    }, 50);
-                }
+                if (value === 'showing') renderer.select(sub);
             },
             get: function () {
                 return renderer.current && renderer.current.url === sub.url ? 'showing' : 'disabled';
@@ -656,6 +643,8 @@
         Lampa.PlayerPanel._opensubtitles_hooked = true;
         Lampa.PlayerPanel.setSubs = function (list) {
             var arr = Array.prototype.slice.call(list || []);
+            latestPanelSubs = arr;
+
             var nonOurs = arr.filter(function (item) { return item && !isOurSub(item); });
             var hasOurs = arr.length !== nonOurs.length;
 
@@ -673,6 +662,46 @@
 
             return result;
         };
+    }
+
+    function hookSubsviewSignal() {
+        if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.listener) return;
+        if (Lampa.PlayerPanel._opensubtitles_subsview_hooked) return;
+
+        Lampa.PlayerPanel._opensubtitles_subsview_hooked = true;
+        Lampa.PlayerPanel.listener.follow('subsview', function () {
+            if (actionWasPicked) {
+                logDebug('subsview ignored: action picked');
+                return;
+            }
+
+            setTimeout(function () {
+                if (!renderer.current) return;
+
+                var picked = null;
+                for (var i = 0; i < latestPanelSubs.length; i++) {
+                    try {
+                        if (latestPanelSubs[i] && latestPanelSubs[i].selected === true) {
+                            picked = latestPanelSubs[i];
+                            break;
+                        }
+                    }
+                    catch (e) {}
+                }
+
+                if (!picked || picked.isDisabled) {
+                    logDebug('subsview disable: nothing selected or disabled item picked');
+                    renderer.disable();
+                }
+                else if (picked.url && picked.url === renderer.current.url) {
+                    logDebug('subsview keep: our sub still picked');
+                }
+                else {
+                    logDebug('subsview disable: different item picked', picked.title);
+                    renderer.disable();
+                }
+            }, 0);
+        });
     }
 
     function installToPanel() {
@@ -954,9 +983,11 @@
 
     addSettings();
     hookPanelSetSubs();
+    hookSubsviewSignal();
 
     Lampa.Player.listener.follow('ready', function (data) {
         hookPanelSetSubs();
+        hookSubsviewSignal();
         startPlayer(data);
     });
     Lampa.Player.listener.follow('destroy', destroyPlayer);
