@@ -683,6 +683,51 @@
         };
     }
 
+    function hookVideoSubsview() {
+        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.subsview !== 'function') {
+            logDebug('hookVideoSubsview: Lampa.PlayerVideo.subsview not available');
+            return;
+        }
+        if (Lampa.PlayerVideo._opensubtitles_subsview_hooked) return;
+
+        var original = Lampa.PlayerVideo.subsview;
+        Lampa.PlayerVideo._opensubtitles_subsview_hooked = true;
+
+        Lampa.PlayerVideo.subsview = function (status) {
+            logDebug('Lampa.PlayerVideo.subsview status=' + status + ' actionPicked=' + actionWasPicked + ' rendererActive=' + (!!renderer.current));
+
+            if (status === false && renderer.current && !actionWasPicked) {
+                var picked = null;
+                for (var i = 0; i < latestPanelSubs.length; i++) {
+                    try {
+                        if (latestPanelSubs[i] && latestPanelSubs[i].selected === true) {
+                            picked = latestPanelSubs[i];
+                            break;
+                        }
+                    }
+                    catch (e) {}
+                }
+
+                if (picked && !picked.isDisabled && picked.url && picked.url === renderer.current.url) {
+                    logDebug('Lampa.PlayerVideo.subsview: overriding to true (our sub active)');
+                    status = true;
+                }
+                else if (picked && !picked.isDisabled && picked.url && picked.url !== renderer.current.url) {
+                    logDebug('Lampa.PlayerVideo.subsview: different sub picked, disabling our renderer');
+                    renderer.disable();
+                }
+                else if (!picked || picked.isDisabled) {
+                    logDebug('Lampa.PlayerVideo.subsview: nothing or disabled picked, disabling our renderer');
+                    renderer.disable();
+                }
+            }
+
+            return original.call(this, status);
+        };
+
+        logDebug('hookVideoSubsview: installed');
+    }
+
     function hookSubsviewSignal() {
         if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.listener) {
             logDebug('hookSubsviewSignal: no Lampa.PlayerPanel.listener available');
@@ -1028,10 +1073,12 @@
     addSettings();
     hookPanelSetSubs();
     hookSubsviewSignal();
+    hookVideoSubsview();
 
     Lampa.Player.listener.follow('ready', function (data) {
         hookPanelSetSubs();
         hookSubsviewSignal();
+        hookVideoSubsview();
         startPlayer(data);
     });
     Lampa.Player.listener.follow('destroy', destroyPlayer);
