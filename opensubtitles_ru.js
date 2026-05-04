@@ -684,18 +684,23 @@
     }
 
     function hookSubsviewSignal() {
-        if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.listener) return;
+        if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.listener) {
+            logDebug('hookSubsviewSignal: no Lampa.PlayerPanel.listener available');
+            return;
+        }
         if (Lampa.PlayerPanel._opensubtitles_subsview_hooked) return;
 
         Lampa.PlayerPanel._opensubtitles_subsview_hooked = true;
-        Lampa.PlayerPanel.listener.follow('subsview', function () {
-            if (actionWasPicked) {
-                logDebug('subsview ignored: action picked');
-                return;
-            }
+        Lampa.PlayerPanel.listener.follow('subsview', function (event) {
+            logDebug('subsview event fired status=' + (event && event.status) + ' actionPicked=' + actionWasPicked);
+
+            if (actionWasPicked) return;
 
             setTimeout(function () {
-                if (!renderer.current) return;
+                if (!renderer.current) {
+                    logDebug('subsview check: no renderer.current');
+                    return;
+                }
 
                 var picked = null;
                 for (var i = 0; i < latestPanelSubs.length; i++) {
@@ -721,6 +726,8 @@
                 }
             }, 0);
         });
+
+        logDebug('hookSubsviewSignal: installed');
     }
 
     function installToPanel() {
@@ -853,6 +860,10 @@
                 }
             }
 
+            if (this.lastText !== text) {
+                logDebug('cue change at ' + Math.round(time) + 'ms: "' + (text ? text.substring(0, 40) : '<empty>') + '"');
+            }
+
             this.lastText = text;
             showSubtitleText(text);
         },
@@ -879,14 +890,28 @@
         }
     };
 
+    var firstDispatchLogged = false;
+
     function showSubtitleText(text) {
         var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-        if (!video || typeof video.dispatchEvent !== 'function') return;
+        if (!video) {
+            if (!firstDispatchLogged) { logDebug('showSubtitleText: no video element'); firstDispatchLogged = true; }
+            return;
+        }
+        if (typeof video.dispatchEvent !== 'function') {
+            if (!firstDispatchLogged) { logDebug('showSubtitleText: no dispatchEvent on video'); firstDispatchLogged = true; }
+            return;
+        }
 
         try {
             var event = new Event('subtitle');
             event.text = text || '';
             video.dispatchEvent(event);
+
+            if (!firstDispatchLogged) {
+                firstDispatchLogged = true;
+                logDebug('showSubtitleText: first dispatch ok, currentTime=' + video.currentTime + ' text="' + (text || '').substring(0, 30) + '"');
+            }
         }
         catch (e) {
             logDebug('subtitle dispatch error', e && e.message);
