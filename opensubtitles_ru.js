@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v2-subsview-hook-2';
+    var PLUGIN_VERSION = 'v3-force-visible';
 
     if (!window.Lampa) return;
 
@@ -891,6 +891,10 @@
             var self = this;
 
             logDebug('renderer.start: timer fires every 200ms');
+
+            if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
+                try { Lampa.PlayerVideo.subsview(true); } catch (e) {}
+            }
 
             clearInterval(self.timer);
             self.timer = setInterval(function () {
