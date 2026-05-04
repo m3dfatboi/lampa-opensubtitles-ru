@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v6-iso3-controller-restore';
+    var PLUGIN_VERSION = 'v7-always-show-subs-button';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -1102,12 +1102,6 @@
         });
 
         var hasResults = stremioSubs.length > 0;
-        var canAugment = nativeSubsSeen && base.length > 0;
-
-        if (!hasResults && !canAugment) {
-            logDebug('skip dispatch: nothing to add (native=' + base.length + ' seen=' + nativeSubsSeen + ' state=' + searchState + ')');
-            return;
-        }
 
         if (renderer.current) {
             base.forEach(function (item) {
