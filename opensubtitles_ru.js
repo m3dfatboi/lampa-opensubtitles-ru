@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v8-controller-cascade';
+    var PLUGIN_VERSION = 'v9-original-title';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -1411,6 +1411,41 @@
         manualOverride = null;
         renderer.destroy();
         network.clear();
+    }
+
+    function injectOriginalTitle(body, movie) {
+        if (!body || !body.find || !movie) return;
+
+        var displayTitle = (movie.title || movie.name || '').trim();
+        var origTitle = (movie.original_title || movie.original_name || '').trim();
+
+        if (!origTitle || origTitle === displayTitle) return;
+
+        var titleEl = body.find('.full-start-new__title').first();
+        if (!titleEl.length) titleEl = body.find('.full-start__title').first();
+        if (!titleEl.length) return;
+
+        body.find('.opensub-original-title').remove();
+
+        var origEl = $('<div class="opensub-original-title full-start-new__details" style="margin-top: 0.4em;"></div>');
+        origEl.text(origTitle);
+        titleEl.after(origEl);
+    }
+
+    if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+        if (Lampa.Listener._opensub_full_listener) {
+            try { Lampa.Listener.remove('full', Lampa.Listener._opensub_full_listener); }
+            catch (e) {}
+        }
+
+        var fullListener = function (event) {
+            if (event && (event.type === 'complite' || event.type === 'build') && event.body && event.data && event.data.movie) {
+                injectOriginalTitle(event.body, event.data.movie);
+            }
+        };
+
+        Lampa.Listener.follow('full', fullListener);
+        Lampa.Listener._opensub_full_listener = fullListener;
     }
 
     addSettings();
