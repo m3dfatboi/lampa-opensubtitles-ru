@@ -22,7 +22,8 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v3-force-visible';
+    var PLUGIN_VERSION = 'v4-android-external-no-empty';
+    var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
 
@@ -166,6 +167,18 @@
             },
             field: {
                 name: 'Сколько вариантов показывать'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
+                name: PLUGIN_ID + '_android_external',
+                type: 'trigger',
+                default: true
+            },
+            field: {
+                name: 'Android: передавать во внешние плееры'
             }
         });
 
@@ -382,6 +395,81 @@
         });
     }
 
+    function searchExternalSubs(data, done) {
+        var card = activeCard(data);
+        var finished = false;
+        var nets = [];
+        var timer = setTimeout(function () {
+            finish([], 'timeout');
+        }, EXTERNAL_SEARCH_TIMEOUT);
+
+        function finish(list, state) {
+            if (finished) return;
+
+            finished = true;
+            clearTimeout(timer);
+
+            nets.forEach(function (net) {
+                try { net.clear(); } catch (e) {}
+            });
+
+            done(list || [], state || 'empty');
+        }
+
+        loadImdbIfNeeded(card, data, function (imdb) {
+            if (finished) return;
+
+            var request = stremioRequestId(card, data, imdb);
+
+            if (!request) {
+                finish([], isSeries(card, data) ? 'no-episode' : 'no-imdb');
+                return;
+            }
+
+            var bases = addonBases();
+            var pending = bases.length;
+            var rawList = [];
+            var anySuccess = false;
+
+            function finalize() {
+                var mapped = mapStremioResults(rawList);
+
+                finish(mapped, anySuccess ? (mapped.length ? 'ready' : 'empty') : 'error');
+            }
+
+            if (!pending) {
+                finish([], 'empty');
+                return;
+            }
+
+            logDebug('external android: search', request.type, request.id, 'across', bases.length, 'addons');
+
+            bases.forEach(function (base) {
+                var url = buildAddonUrl(base, request.type, request.id);
+                var net = new Lampa.Reguest();
+
+                nets.push(net);
+                net.timeout(EXTERNAL_SEARCH_TIMEOUT);
+                net.silent(url, function (json) {
+                    if (finished) return;
+
+                    anySuccess = true;
+                    rawList = rawList.concat(json && json.subtitles ? json.subtitles : []);
+
+                    if (--pending === 0) {
+                        finalize();
+                    }
+                }, function () {
+                    if (finished) return;
+
+                    if (--pending === 0) {
+                        finalize();
+                    }
+                });
+            });
+        });
+    }
+
     function mapStremioResults(results) {
         var limit = parseInt(storage(PLUGIN_ID + '_limit', '15'), 10) || 15;
         var lang = selectedLanguage();
@@ -422,6 +510,88 @@
 
     function isOurSub(item) {
         return item && (item.stremio || item.source === 'stremio-opensubtitles');
+    }
+
+    function normalizeExternalSubtitle(item) {
+        var url = typeof item === 'string' ? item : item && (item.url || item.src);
+
+        if (!url) return null;
+
+        return {
+            url: url,
+            label: item && (item.label || item.title || item.name) || PLUGIN_TITLE,
+            language: item && (item.language || item.lang) || ''
+        };
+    }
+
+    function externalSubtitleItem(item, index, total) {
+        var lang = selectedLanguage();
+        var label = PLUGIN_TITLE + ' ' + lang.name;
+
+        if (total > 1) label += ' #' + (index + 1);
+
+        return {
+            url: item.url,
+            label: label,
+            language: item.lang || lang.iso2
+        };
+    }
+
+    function mergeSubtitleLists(existing, additions) {
+        var result = [];
+        var seen = {};
+
+        (Array.isArray(existing) ? existing : []).forEach(function (item) {
+            var sub = normalizeExternalSubtitle(item);
+
+            if (!sub || seen[sub.url]) return;
+
+            seen[sub.url] = true;
+            result.push(sub);
+        });
+
+        additions.forEach(function (item) {
+            var sub = normalizeExternalSubtitle(item);
+
+            if (!sub || seen[sub.url]) return;
+
+            seen[sub.url] = true;
+            result.push(sub);
+        });
+
+        return result;
+    }
+
+    function normalizeVideoUrl(url) {
+        return (url || '').replace('&preload', '&play');
+    }
+
+    function attachExternalSubtitles(data, items) {
+        if (!data || !items || !items.length) return 0;
+
+        var additions = items.map(function (item, index) {
+            return externalSubtitleItem(item, index, items.length);
+        });
+        var playlist = Array.isArray(data.playlist) ? data.playlist : [];
+        var currentUrl = normalizeVideoUrl(data.url);
+        var attachedToPlaylist = false;
+
+        data.subtitles = mergeSubtitleLists(data.subtitles, additions);
+
+        playlist.forEach(function (item) {
+            if (!item || !item.url) return;
+
+            if (normalizeVideoUrl(item.url) === currentUrl) {
+                item.subtitles = mergeSubtitleLists(item.subtitles, additions);
+                attachedToPlaylist = true;
+            }
+        });
+
+        if (!attachedToPlaylist && playlist.length === 1) {
+            playlist[0].subtitles = mergeSubtitleLists(playlist[0].subtitles, additions);
+        }
+
+        return additions.length;
     }
 
     function normalExistingSubs() {
@@ -582,10 +752,6 @@
         var text = PLUGIN_TITLE;
 
         if (searchState === 'searching') text += ': поиск ' + lang.name + '...';
-        else if (searchState === 'no-imdb') text += ': нет IMDb ID';
-        else if (searchState === 'no-episode') text += ': нет сезона/серии';
-        else if (searchState === 'empty') text += ': ' + lang.name + ' не найдены';
-        else if (searchState === 'error') text += ': ошибка поиска';
         else return null;
 
         return {
@@ -782,6 +948,54 @@
         });
 
         logDebug('hookSubsviewSignal: installed');
+    }
+
+    function hookAndroidOpenPlayer() {
+        if (!Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') {
+            logDebug('hookAndroidOpenPlayer: Lampa.Android.openPlayer not available');
+            return;
+        }
+        if (Lampa.Android.openPlayer._opensub_version === PLUGIN_VERSION) return;
+
+        var original = Lampa.Android.openPlayer._opensub_original || Lampa.Android.openPlayer;
+
+        var wrapper = function (link, data) {
+            var self = this;
+            var payload = data;
+
+            if (!isEnabled() ||
+                !storageBool(PLUGIN_ID + '_android_external', true) ||
+                !Lampa.Platform ||
+                !Lampa.Platform.is ||
+                !Lampa.Platform.is('android') ||
+                typeof window.AndroidJS === 'undefined' ||
+                !payload ||
+                typeof payload !== 'object') {
+                return original.apply(self, arguments);
+            }
+
+            if (!payload.url && link) payload.url = link;
+
+            logDebug('external android: preparing subtitles for', payload.title || payload.path || payload.url);
+
+            searchExternalSubs(payload, function (items, state) {
+                if (items && items.length) {
+                    var count = attachExternalSubtitles(payload, items);
+                    logDebug('external android: attached', count, 'subs');
+                }
+                else {
+                    logDebug('external android: launch without subtitles, state=' + state);
+                }
+
+                original.call(self, link, payload);
+            });
+        };
+
+        wrapper._opensub_version = PLUGIN_VERSION;
+        wrapper._opensub_original = original;
+        Lampa.Android.openPlayer = wrapper;
+
+        logDebug('hookAndroidOpenPlayer: installed', PLUGIN_VERSION);
     }
 
     function installToPanel() {
@@ -1087,11 +1301,13 @@
     hookPanelSetSubs();
     hookSubsviewSignal();
     hookVideoSubsview();
+    hookAndroidOpenPlayer();
 
     Lampa.Player.listener.follow('ready', function (data) {
         hookPanelSetSubs();
         hookSubsviewSignal();
         hookVideoSubsview();
+        hookAndroidOpenPlayer();
         startPlayer(data);
     });
     Lampa.Player.listener.follow('destroy', destroyPlayer);
