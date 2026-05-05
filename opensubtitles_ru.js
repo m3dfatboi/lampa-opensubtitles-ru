@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v11-original-title-head';
+    var PLUGIN_VERSION = 'v12-vimu-srt-url';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
 
     if (!window.Lampa) return;
@@ -332,6 +332,31 @@
         return 'https://rest.opensubtitles.org/search/imdbid-' + imdbDigits + '/sublanguageid-' + langCode;
     }
 
+    function subtitleDownloadUrl(url) {
+        var value = (url || '').trim();
+        var query = '';
+        var hash = '';
+        var hashIndex;
+        var queryIndex;
+
+        if (!value || /\.srt(?:[?#]|$)/i.test(value)) return value;
+        if (!/subs\d*\.strem\.io\/.*\/file\/[^/?#]+/i.test(value)) return value;
+
+        hashIndex = value.indexOf('#');
+        if (hashIndex >= 0) {
+            hash = value.substring(hashIndex);
+            value = value.substring(0, hashIndex);
+        }
+
+        queryIndex = value.indexOf('?');
+        if (queryIndex >= 0) {
+            query = value.substring(queryIndex);
+            value = value.substring(0, queryIndex);
+        }
+
+        return value + '.srt' + query + hash;
+    }
+
     function mapRestItems(items) {
         if (!items || !items.length) return [];
         var mapped = [];
@@ -340,7 +365,7 @@
             if (!item || !item.IDSubtitleFile) continue;
             mapped.push({
                 id: item.IDSubtitle || item.IDSubtitleFile,
-                url: 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile,
+                url: 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile + '.srt',
                 lang: item.SubLanguageID || '',
                 SubEncoding: 'utf-8',
                 m: 'i',
@@ -556,7 +581,7 @@
 
         results.forEach(function (item) {
             var rawLang = (item && (item.lang || item.language || item.SubLanguageID || item.iso639)) || '';
-            var url = item && item.url;
+            var url = subtitleDownloadUrl(item && item.url);
 
             if (!url || !matchesLanguage(rawLang, lang)) return;
             if (seen[url]) return;
