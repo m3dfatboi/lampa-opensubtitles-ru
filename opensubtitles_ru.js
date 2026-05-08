@@ -2044,6 +2044,7 @@
                     '<div class="account-modal-split__title">ИИ перевод субтитров</div>' +
                     '<div class="account-modal-split__text">' +
                         '<div style="font-size:2.2em;font-weight:700;letter-spacing:.12em;margin:.6em 0">' + escapeHtml(code) + '</div>' +
+                        '<p><b>Баланс:</b> <span class="opensub-service-balance-value">' + escapeHtml(accountStatusText()) + '</span></p>' +
                         '<p>Бот ' + escapeHtml(botName) + ' привязывает Lampa к вашему балансу, показывает кредиты и помогает купить переводы после бесплатного лимита.</p>' +
                         '<p>Без привязки доступны 3 бесплатных ИИ-перевода на этом устройстве. После привязки переводы списываются с баланса кредитов.</p>' +
                         '<p>Откройте бота и отправьте код выше или просто отсканируйте QR-код.</p>' +
@@ -2051,6 +2052,11 @@
                     '</div>' +
                 '</div>' +
             '</div>');
+
+            function updateBalanceLine(account) {
+                if (account) saveAccountState(account);
+                html.find('.opensub-service-balance-value').text(accountStatusText());
+            }
 
             if (Lampa.Utils && Lampa.Utils.qrcode) {
                 Lampa.Utils.qrcode(qrLink, html.find('.account-modal-split__qr-code'), function () {
@@ -2082,6 +2088,7 @@
                             balance: balance,
                             unlimited: status.unlimited
                         });
+                        updateBalanceLine();
                         clearInterval(timer);
                         notify('Telegram подключен' + (status.unlimited ? '. Баланс: безлимит' : (typeof balance !== 'undefined' ? '. Баланс: ' + balance + ' кредитов' : '')));
                         closeModal();
@@ -2109,6 +2116,9 @@
             else notify('Откройте Telegram: ' + visibleLink + ' и отправьте код ' + code);
 
             timer = setInterval(checkSession, SERVICE_POLL_INTERVAL);
+            refreshAccountState(updateBalanceLine, function () {
+                updateBalanceLine();
+            });
             checkSession();
         }, function (xhr) {
             notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
