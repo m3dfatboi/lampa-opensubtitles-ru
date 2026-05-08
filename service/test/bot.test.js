@@ -16,8 +16,9 @@ function createBot(overrides = {}) {
       proxyUrl: ''
     },
     product: {
-      packages: [],
-      creditChars: 10000
+      packages: overrides.packages || [],
+      creditChars: 10000,
+      manualPaymentContact: '@m3dv3d3v'
     }
   }, {
     linkDeviceByCode: (code) => {
@@ -29,7 +30,11 @@ function createBot(overrides = {}) {
           unlimited: false
         }
       };
-    }
+    },
+    robokassa: {
+      isConfigured: () => Boolean(overrides.robokassaConfigured)
+    },
+    ...overrides.service
   }, {
     ensureUser: (user) => ({ id: user.id, ...user }),
     listUserTranslations: () => [],
@@ -42,6 +47,7 @@ function createBot(overrides = {}) {
     }),
     countLinkedUsers: () => 0,
     listLinkedUsers: () => [],
+    getUserById: (id) => ({ id, telegram_id: '999', first_name: 'User', balance: 0, unlimited: 0 }),
     ...overrides.store
   });
 
@@ -107,6 +113,112 @@ test('bot reports empty history when user has no translations', async () => {
   });
 
   assert.match(sent[0].text, /История переводов пуста/);
+});
+
+test('payment menu suggests manual contact when robokassa is offline', async () => {
+  const { bot, sent } = createBot({
+    robokassaConfigured: false,
+    packages: [{ id: 'credits_30', title: '30', credits: 30, price: '299.00' }]
+  });
+
+  await bot.handleMessage({
+    text: 'Купить кредиты',
+    from: { id: 42, username: 'viewer' },
+    chat: { id: 100 }
+  });
+
+  const text = sent[0].text;
+  assert.match(text, /Онлайн-оплата пока не подключена/);
+  assert.match(text, /@m3dv3d3v/);
+  assert.match(text, /https:\/\/t\.me\/m3dv3d3v/);
+  assert.match(sent[0].extra.reply_markup.inline_keyboard[0][0].url, /t\.me\/m3dv3d3v/);
+});
+
+test('admin notifications skip the acting user and reach other admins', async () => {
+  const { bot, sent } = createBot({ admins: ['100', '200', '300'] });
+  bot.store.getUserById = () => ({
+    id: 1,
+    telegram_id: '200',
+    username: 'buyer',
+    first_name: 'Pavel',
+    balance: 30,
+    unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 3,
+    source_chars: 25000,
+    media_json: JSON.stringify({ title: 'Inception', year: '2010', type: 'movie' })
+  });
+
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent.map((m) => String(m.chatId)).sort(), ['100', '300']);
+  assert.match(sent[0].text, /Новый перевод/);
+  assert.match(sent[0].text, /Pavel/);
+  assert.match(sent[0].text, /Inception/);
+  assert.match(sent[0].text, /Английский → Русский/);
+  assert.match(sent[0].text, /3 кр\./);
+});
+
+test('admin notifications fire for paid orders too', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 7,
+    telegram_id: '777',
+    username: 'kate',
+    first_name: 'Kate',
+    balance: 130,
+    unlimited: 0
+  });
+
+  await bot.notifyAdminsOfPayment({ id: 7, telegram_id: '777' }, {
+    credits: 100,
+    amount: '899.00'
+  });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Новая оплата/);
+  assert.match(sent[0].text, /Kate/);
+  assert.match(sent[0].text, /100 кредитов/);
+  assert.match(sent[0].text, /899\.00 ₽/);
+});
+
+test('history hides season\\/episode for movies even when stored', async () => {
+  const rows = [{
+    id: 'job-movie',
+    source_language: 'eng',
+    target_language: 'rus',
+    source_chars: 50000,
+    credits_spent: 5,
+    media_json: JSON.stringify({
+      title: 'The Matrix',
+      year: '1999',
+      type: 'movie',
+      season: 20,
+      episode: 108
+    }),
+    completed_at: '2026-05-08T14:32:00.000Z',
+    created_at: '2026-05-08T14:30:00.000Z'
+  }];
+
+  const { bot, sent } = createBot({
+    store: { listUserTranslations: () => rows }
+  });
+
+  await bot.handleMessage({
+    text: '/history',
+    from: { id: 42, username: 'viewer' },
+    chat: { id: 100 }
+  });
+
+  const text = sent[0].text;
+  assert.match(text, /The Matrix/);
+  assert.match(text, /1999/);
+  assert.doesNotMatch(text, /S20/);
+  assert.doesNotMatch(text, /E108/);
 });
 
 test('devices list shows relative last-seen time, not raw ISO', async () => {
@@ -202,6 +314,7 @@ test('bot formats history with title, langs, credits and date', async () => {
     media_json: JSON.stringify({
       title: 'Breaking Bad',
       year: '2008',
+      type: 'series',
       season: 5,
       episode: 14
     }),
@@ -213,7 +326,7 @@ test('bot formats history with title, langs, credits and date', async () => {
     target_language: 'rus',
     source_chars: 18000,
     credits_spent: 0,
-    media_json: JSON.stringify({ title: 'Inception', year: '2010' }),
+    media_json: JSON.stringify({ title: 'Inception', year: '2010', type: 'movie' }),
     completed_at: '2026-05-07T18:05:00.000Z',
     created_at: '2026-05-07T18:00:00.000Z'
   }];

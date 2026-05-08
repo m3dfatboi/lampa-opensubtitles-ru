@@ -14,6 +14,8 @@ const service = new LampaTranslateService({ config, store, translator, robokassa
 const bot = new TelegramBot(config, service, store);
 const server = createServer(service, bot, config);
 
+service.queue.onJobComplete = (job) => bot.notifyAdminsOfTranslation(job);
+
 service.start();
 bot.start();
 

@@ -2324,12 +2324,13 @@
 
     function serviceMediaInfo() {
         var card = activeCard(lastPlayerData);
-        var episode = parseEpisode(lastPlayerData || {});
+        var series = isSeries(card, lastPlayerData);
+        var episode = series ? parseEpisode(lastPlayerData || {}) : { season: 0, episode: 0 };
 
         return {
             imdb_id: card && card.imdb_id || '',
             tmdb_id: card && card.id || '',
-            type: isSeries(card, lastPlayerData) ? 'series' : 'movie',
+            type: series ? 'series' : 'movie',
             title: card && (card.title || card.name) || lastPlayerData && lastPlayerData.title || '',
             original_title: card && (card.original_title || card.original_name) || '',
             original_language: originalLanguageCode(card),

@@ -137,7 +137,7 @@ function formatHistoryEntry(row, index, creditChars) {
   const originalTitle = String(media.original_title || '').trim();
 
   const meta = [];
-  if (Number(media.season) && Number(media.episode)) {
+  if (media.type === 'series' && Number(media.season) && Number(media.episode)) {
     meta.push(`S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`);
   }
   if (media.year) meta.push(escapeHtml(String(media.year)));
@@ -182,6 +182,17 @@ function extractLinkCode(text) {
 function userTitle(user) {
   if (user.username) return `@${user.username}`;
   return user.first_name || user.telegram_id;
+}
+
+function formatUserMention(user) {
+  if (!user) return 'неизвестный пользователь';
+  const id = String(user.telegram_id || '').trim();
+  if (id.startsWith('anon:')) return 'Анонимное устройство';
+
+  const firstName = String(user.first_name || '').trim() || 'Без имени';
+  const username = String(user.username || '').trim();
+  const link = id ? `<a href="tg://user?id=${escapeHtml(id)}">${escapeHtml(firstName)}</a>` : escapeHtml(firstName);
+  return username ? `${link} @${escapeHtml(username)}` : link;
 }
 
 function formatUserForStats(user, index) {
@@ -503,6 +514,13 @@ export class TelegramBot {
 
     if (data.startsWith('buy:')) {
       const packageId = data.slice(4);
+
+      if (!this.service.robokassa || !this.service.robokassa.isConfigured()) {
+        return this.sendMessage(chatId, this.manualPaymentText(), {
+          reply_markup: this.manualPaymentKeyboard()
+        });
+      }
+
       try {
         const payment = this.service.createPaymentForUser(user, packageId);
         return this.sendMessage(chatId, `Счёт #${payment.inv_id} создан. После оплаты кредиты начислятся автоматически.`, {
@@ -580,8 +598,37 @@ export class TelegramBot {
     });
   }
 
+  manualPaymentText() {
+    const contact = String(this.config.product.manualPaymentContact || '@m3dv3d3v').trim();
+    const handle = contact.replace(/^@/, '');
+    const link = `<a href="https://t.me/${encodeURIComponent(handle)}">@${escapeHtml(handle)}</a>`;
+    return [
+      'Онлайн-оплата пока не подключена.',
+      '',
+      `Чтобы пополнить баланс, напишите ${link} напрямую — договоримся о количестве кредитов и удобном способе оплаты.`
+    ].join('\n');
+  }
+
+  manualPaymentKeyboard() {
+    const contact = String(this.config.product.manualPaymentContact || '@m3dv3d3v').trim();
+    const handle = contact.replace(/^@/, '');
+    return {
+      inline_keyboard: [
+        [{ text: `Написать @${handle}`, url: `https://t.me/${encodeURIComponent(handle)}` }],
+        [{ text: 'Баланс', callback_data: 'balance' }]
+      ]
+    };
+  }
+
   async showPackages(chatId, telegramUser) {
     this.store.ensureUser(telegramUser);
+
+    if (!this.service.robokassa || !this.service.robokassa.isConfigured()) {
+      return this.sendMessage(chatId, this.manualPaymentText(), {
+        reply_markup: this.manualPaymentKeyboard()
+      });
+    }
+
     const keyboard = this.config.product.packages.map((pkg) => ([{
       text: `${pkg.title} - ${Number(pkg.price).toFixed(0)} ₽`,
       callback_data: `buy:${pkg.id}`
@@ -627,5 +674,64 @@ export class TelegramBot {
     if (!user?.telegram_id) return;
     const fresh = this.store.getUserById(user.id);
     await this.sendMessage(user.telegram_id, `Оплата прошла. Начислено ${payment.credits} кредитов.\nБаланс: ${fresh.balance} кредитов.`);
+  }
+
+  async notifyAdmins(text, options = {}) {
+    if (!this.enabled) return;
+    const admins = this.config.telegram.admins || [];
+    const skip = options.skipTelegramId ? String(options.skipTelegramId) : '';
+
+    for (const adminId of admins) {
+      if (skip && String(adminId) === skip) continue;
+      try {
+        await this.sendMessage(adminId, text);
+      }
+      catch (error) {
+        console.error('[bot] admin notify failed', error.message);
+      }
+    }
+  }
+
+  async notifyAdminsOfTranslation(job) {
+    if (!job) return;
+    const user = this.store.getUserById(job.user_id);
+    if (!user) return;
+
+    const media = safeParseMedia(job.media_json);
+    const title = String(media.title || '').trim() || 'Без названия';
+    const meta = [];
+    if (media.type === 'series' && Number(media.season) && Number(media.episode)) {
+      meta.push(`S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`);
+    }
+    if (media.year) meta.push(escapeHtml(String(media.year)));
+
+    const langs = `${languageNameRu(job.source_language)} → ${languageNameRu(job.target_language)}`;
+    const credits = Number(job.credits_spent) > 0
+      ? `${job.credits_spent} кр.`
+      : (user.unlimited ? 'безлимит' : 'бесплатный лимит');
+    const tail = meta.length ? ` · ${meta.join(' · ')}` : '';
+
+    const lines = [
+      '<b>Новый перевод</b>',
+      formatUserMention(user) + (user.unlimited ? ' · безлимит' : ` · баланс ${user.balance} кр.`),
+      `<b>${escapeHtml(title)}</b>${tail}`,
+      `${langs} · ${credits} · ${Number(job.source_chars) || 0} симв.`
+    ];
+
+    await this.notifyAdmins(lines.join('\n'), { skipTelegramId: user.telegram_id });
+  }
+
+  async notifyAdminsOfPayment(user, payment) {
+    if (!user || !payment) return;
+    const fresh = this.store.getUserById(user.id) || user;
+
+    const lines = [
+      '<b>Новая оплата</b>',
+      formatUserMention(fresh),
+      `${payment.credits} кредитов · ${Number(payment.amount).toFixed(2)} ₽`,
+      `Баланс: ${fresh.unlimited ? 'безлимит' : `${fresh.balance} кр.`}`
+    ];
+
+    await this.notifyAdmins(lines.join('\n'), { skipTelegramId: fresh.telegram_id });
   }
 }

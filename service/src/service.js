@@ -43,6 +43,7 @@ export class TranslationQueue {
     this.translator = translator;
     this.queue = [];
     this.running = false;
+    this.onJobComplete = null;
   }
 
   enqueue(jobId) {
@@ -79,6 +80,7 @@ export class TranslationQueue {
       const cached = this.store.getCachedTranslation(job.cache_key);
       if (cached) {
         this.store.completeJob(job, cached.cues);
+        this.fireOnJobComplete(job.id);
         return;
       }
 
@@ -97,10 +99,21 @@ export class TranslationQueue {
       });
 
       this.store.completeJob(job, translated);
+      this.fireOnJobComplete(job.id);
     }
     catch (error) {
       this.store.failJob(job, error?.message || 'translation failed');
     }
+  }
+
+  fireOnJobComplete(jobId) {
+    if (typeof this.onJobComplete !== 'function') return;
+    const completed = this.store.getTranslationJob(jobId);
+    if (!completed) return;
+
+    Promise.resolve()
+      .then(() => this.onJobComplete(completed))
+      .catch((error) => console.error('[queue] onJobComplete failed', error.message));
   }
 }
 

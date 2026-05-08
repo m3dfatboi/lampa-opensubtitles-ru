@@ -135,6 +135,9 @@ export function createServer(service, bot, config) {
           bot.notifyPayment(result.user, result.payment).catch((error) => {
             console.error('[bot] payment notify failed', error);
           });
+          bot.notifyAdminsOfPayment(result.user, result.payment).catch((error) => {
+            console.error('[bot] admin payment notify failed', error);
+          });
         }
 
         textResponse(res, 200, `OK${result.payment.inv_id}`, CORS);

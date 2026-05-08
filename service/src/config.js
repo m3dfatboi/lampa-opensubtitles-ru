@@ -116,6 +116,7 @@ export function createConfig(rootDir = process.cwd()) {
       chunkMaxCues: intEnv('TRANSLATION_CHUNK_MAX_CUES', 80),
       chunkMaxChars: intEnv('TRANSLATION_CHUNK_MAX_CHARS', 8000),
       chunkMaxTokens: intEnv('TRANSLATION_CHUNK_MAX_TOKENS', 12000),
+      manualPaymentContact: (process.env.MANUAL_PAYMENT_CONTACT || '@m3dv3d3v').trim(),
       packages: packagesEnv()
     },
     robokassa: {
