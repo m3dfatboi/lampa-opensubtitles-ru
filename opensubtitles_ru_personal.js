@@ -22,12 +22,15 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v14-personal-cache';
+    var PLUGIN_VERSION = 'v15-personal-safe-chunks';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
     var DEFAULT_OPENROUTER_MODEL = 'openrouter/auto';
     var TRANSLATION_CACHE_LIMIT = 5;
     var TRANSLATION_CACHE_MAX_BYTES = 1200000;
+    var TRANSLATION_CHUNK_MAX_CUES = 80;
+    var TRANSLATION_CHUNK_MAX_CHARS = 8000;
+    var TRANSLATION_CHUNK_MAX_TOKENS = 12000;
 
     var EXTRA_LANGUAGE_META = {
         jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
@@ -75,6 +78,8 @@
     var latestPanelSubs = [];
     var translationMemory = {};
     var translationPending = {};
+    var translationStatusNode = null;
+    var translationStatusTextNode = null;
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -1487,6 +1492,54 @@
             .replace(/&amp;/g, '&');
     }
 
+    function showTranslationStatus(text) {
+        if (typeof document === 'undefined' || !document.createElement || !document.body) return;
+
+        if (!translationStatusNode) {
+            translationStatusNode = document.createElement('div');
+            translationStatusNode.className = 'opensubtitles-translation-status';
+            translationStatusNode.style.cssText = [
+                'position:fixed',
+                'left:50%',
+                'bottom:7.5em',
+                'transform:translateX(-50%)',
+                'z-index:2147483647',
+                'max-width:84vw',
+                'padding:0.85em 1.2em',
+                'border-radius:0.45em',
+                'background:rgba(13,16,22,0.94)',
+                'color:#fff',
+                'font-size:1.05em',
+                'line-height:1.35',
+                'text-align:center',
+                'box-shadow:0 0.35em 1.4em rgba(0,0,0,0.38)',
+                'pointer-events:none'
+            ].join(';');
+
+            translationStatusTextNode = document.createElement('span');
+            translationStatusNode.appendChild(translationStatusTextNode);
+            document.body.appendChild(translationStatusNode);
+        }
+
+        if (translationStatusTextNode) translationStatusTextNode.textContent = text || '';
+    }
+
+    function updateTranslationStatus(text) {
+        showTranslationStatus(text);
+    }
+
+    function hideTranslationStatus() {
+        if (!translationStatusNode) return;
+
+        try {
+            if (translationStatusNode.parentNode) translationStatusNode.parentNode.removeChild(translationStatusNode);
+        }
+        catch (e) {}
+
+        translationStatusNode = null;
+        translationStatusTextNode = null;
+    }
+
     function translationItems(cues) {
         return cues.map(function (cue, index) {
             return {
@@ -1682,29 +1735,53 @@
             chars += (item.text || '').length;
         });
 
-        return Math.min(64000, Math.max(4096, Math.ceil(chars / 1.7) + 3000));
+        return Math.min(TRANSLATION_CHUNK_MAX_TOKENS, Math.max(2048, Math.ceil(chars / 1.25) + 2200));
     }
 
-    function translateCueFile(cues, sourceLang, targetLang, done, fail) {
+    function buildTranslationChunks(cues) {
+        var chunks = [];
+        var current = [];
+        var chars = 0;
+
+        translationItems(cues).forEach(function (item) {
+            var itemChars = (item.text || '').length;
+
+            if (current.length && (current.length >= TRANSLATION_CHUNK_MAX_CUES || chars + itemChars > TRANSLATION_CHUNK_MAX_CHARS)) {
+                chunks.push(current);
+                current = [];
+                chars = 0;
+            }
+
+            current.push(item);
+            chars += itemChars;
+        });
+
+        if (current.length) chunks.push(current);
+
+        return chunks;
+    }
+
+    function translateCueChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
         var sourceName = promptLanguageName(sourceLang);
         var targetName = promptLanguageName(targetLang);
-        var items = translationItems(cues);
         var body = {
             model: openRouterModel(),
             temperature: 0.1,
-            max_tokens: translationMaxTokens(items),
+            max_tokens: translationMaxTokens(chunk),
             messages: [
                 {
                     role: 'system',
-                    content: 'You translate a complete subtitle file. Use the whole file as context. Preserve cue order, count, line breaks, punctuation, names, tone, and meaning. Return only valid JSON.'
+                    content: 'You translate one sequential chunk from a subtitle file. Preserve cue order, count, line breaks, punctuation, names, tone, and meaning. Return only valid JSON.'
                 },
                 {
                     role: 'user',
                     content: JSON.stringify({
                         source_language: sourceName,
                         target_language: targetName,
-                        instructions: 'Translate every item.text from the beginning to the end as one complete subtitle file. Keep the same numeric id for every item. Do not merge, split, skip, summarize, add commentary, or wrap in Markdown. Output exactly {"items":[{"id":number,"text":"translated text"}]}.',
-                        items: items
+                        chunk: chunkIndex,
+                        total_chunks: chunkTotal,
+                        instructions: 'Translate every item.text in this chunk. Keep the same numeric id for every item. Do not merge, split, skip, summarize, add commentary, or wrap in Markdown. Output exactly {"items":[{"id":number,"text":"translated text"}]}.',
+                        items: chunk
                     })
                 }
             ]
@@ -1718,7 +1795,7 @@
 
             try {
                 if (json && json.choices && json.choices[0] && json.choices[0].finish_reason === 'length') {
-                    fail({ message: 'OpenRouter обрезал ответ, перевод не был применен' });
+                    fail({ message: 'OpenRouter обрезал ответ на части ' + chunkIndex + ' из ' + chunkTotal + ', перевод не был применен' });
                     return;
                 }
 
@@ -1735,6 +1812,84 @@
             type: 'POST',
             headers: openRouterHeaders()
         });
+    }
+
+    function normalizeChunkItems(chunk, items) {
+        return (items || []).map(function (item, index) {
+            var fallbackId = chunk[index] && chunk[index].id;
+            var copy;
+            var key;
+
+            if (typeof item === 'string') return { id: fallbackId, text: item };
+            if (!item || typeof item !== 'object') return item;
+
+            if (typeof item.id !== 'undefined' || typeof item.index !== 'undefined' || typeof item.n !== 'undefined') return item;
+
+            copy = {};
+            for (key in item) {
+                if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key];
+            }
+            copy.id = fallbackId;
+
+            return copy;
+        });
+    }
+
+    function translatedCountForChunk(chunk, items) {
+        var expected = {};
+        var count = 0;
+
+        chunk.forEach(function (item) {
+            expected[String(item.id)] = true;
+        });
+
+        (items || []).forEach(function (item, index) {
+            var id = translatedIdFromItem(item, index);
+            var text = translatedTextFromItem(item);
+
+            if (expected[String(id)] && typeof text === 'string' && text.trim()) count++;
+        });
+
+        return count;
+    }
+
+    function translateCueFile(cues, sourceLang, targetLang, progress, done, fail) {
+        var chunks = buildTranslationChunks(cues);
+        var translatedItems = [];
+        var index = 0;
+
+        function next() {
+            var chunk = chunks[index];
+
+            if (!chunk) {
+                done(translatedItems);
+                return;
+            }
+
+            translateCueChunk(chunk, sourceLang, targetLang, index + 1, chunks.length, function (items) {
+                items = normalizeChunkItems(chunk, items);
+
+                if (translatedCountForChunk(chunk, items) < Math.max(1, Math.floor(chunk.length * 0.95))) {
+                    fail({ message: 'OpenRouter вернул неполный перевод на части ' + (index + 1) + ' из ' + chunks.length + ', перевод остановлен' });
+                    return;
+                }
+
+                translatedItems = translatedItems.concat(items || []);
+                index++;
+
+                if (progress) progress(index, chunks.length);
+
+                next();
+            }, fail);
+        }
+
+        if (!chunks.length) {
+            done([]);
+            return;
+        }
+
+        if (progress) progress(0, chunks.length);
+        next();
     }
 
     function applyTranslatedItems(cues, items) {
@@ -1770,7 +1925,7 @@
         return translated;
     }
 
-    function translateCuesWithCache(cacheKey, cues, sourceLang, targetLang, done, fail) {
+    function translateCuesWithCache(cacheKey, cues, sourceLang, targetLang, progress, done, fail) {
         var cached = cachedTranslation(cacheKey);
 
         if (cached) {
@@ -1781,15 +1936,25 @@
         if (translationPending[cacheKey]) {
             translationPending[cacheKey].done.push(done);
             translationPending[cacheKey].fail.push(fail);
+            if (progress) translationPending[cacheKey].progress.push(progress);
             return;
         }
 
         translationPending[cacheKey] = {
             done: [done],
-            fail: [fail]
+            fail: [fail],
+            progress: progress ? [progress] : []
         };
 
-        translateCueFile(cues, sourceLang, targetLang, function (items) {
+        translateCueFile(cues, sourceLang, targetLang, function (current, total) {
+            var pending = translationPending[cacheKey];
+
+            if (!pending) return;
+
+            pending.progress.forEach(function (callback) {
+                callback(current, total);
+            });
+        }, function (items) {
             var translated;
             var pending = translationPending[cacheKey];
 
@@ -1826,6 +1991,7 @@
         timer: 0,
         loading: false,
         lastText: null,
+        requestId: 0,
         select: function (item) {
             var self = this;
 
@@ -1879,6 +2045,7 @@
             var targetLang = item.targetLang || selectedLanguage().code;
             var cacheKey = translationCacheKey(item, targetLang);
             var cached = cachedTranslation(cacheKey);
+            var requestId;
 
             logDebug('renderer.selectTranslated', item && item.url, item && item.sourceLang, '→', targetLang);
 
@@ -1906,39 +2073,52 @@
             }
 
             self.disable(false);
+            self.requestId++;
+            requestId = self.requestId;
             self.current = item;
             self.loading = true;
             self.lastText = null;
             item.selected = true;
 
             showSubtitleText('');
-            notify('Перевожу субтитры целиком с ' + languageName(item.sourceLang) + '...');
+            showTranslationStatus('Перевожу субтитры целиком с ' + languageName(item.sourceLang) + '. Субтитры появятся после полной готовности.');
 
             if (translationPending[cacheKey]) {
                 logDebug('renderer.selectTranslated: joining pending translation');
+                updateTranslationStatus('Перевод уже идет. Субтитры появятся после полной готовности.');
 
                 translationPending[cacheKey].done.push(function (translatedCues) {
-                    if (self.current !== item) return;
+                    if (self.requestId !== requestId || self.current !== item) return;
 
+                    hideTranslationStatus();
                     self.cues = cloneCues(translatedCues);
                     self.loading = false;
                     self.start();
                 });
                 translationPending[cacheKey].fail.push(function (xhr) {
-                    if (self.current !== item) return;
+                    if (self.requestId !== requestId || self.current !== item) return;
 
+                    hideTranslationStatus();
                     logDebug('renderer.selectTranslated pending error', xhr && (xhr.status || xhr.message));
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
                     self.disable();
                 });
+                translationPending[cacheKey].progress.push(function (current, total) {
+                    if (self.requestId !== requestId || self.current !== item) return;
+
+                    if (total > 1 && current > 0) updateTranslationStatus('Перевожу субтитры целиком. Готово частей: ' + current + ' из ' + total + '.');
+                    else updateTranslationStatus('Перевожу субтитры целиком. Субтитры появятся после полной готовности.');
+                });
                 return;
             }
+
+            notify('Перевожу субтитры целиком с ' + languageName(item.sourceLang) + '...');
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.sourceUrl || item.url, function (text) {
                 var sourceCues;
 
-                if (self.current !== item) {
+                if (self.requestId !== requestId || self.current !== item) {
                     logDebug('renderer.selectTranslated fetch ignored: current changed');
                     return;
                 }
@@ -1948,14 +2128,21 @@
                 logDebug('renderer.selectTranslated parsed', sourceCues.length, 'source cues from', (text || '').length, 'chars');
 
                 if (!sourceCues.length) {
+                    hideTranslationStatus();
                     notify(PLUGIN_TITLE + ': файл субтитров пустой или не распознан');
                     self.disable();
                     return;
                 }
 
-                translateCuesWithCache(cacheKey, sourceCues, item.sourceLang, targetLang, function (translatedCues, fromCache) {
-                    if (self.current !== item) return;
+                translateCuesWithCache(cacheKey, sourceCues, item.sourceLang, targetLang, function (current, total) {
+                    if (self.requestId !== requestId || self.current !== item) return;
 
+                    if (total > 1 && current > 0) updateTranslationStatus('Перевожу субтитры целиком. Готово частей: ' + current + ' из ' + total + '.');
+                    else updateTranslationStatus('Перевожу субтитры целиком с ' + languageName(item.sourceLang) + '. Субтитры появятся после полной готовности.');
+                }, function (translatedCues, fromCache) {
+                    if (self.requestId !== requestId || self.current !== item) return;
+
+                    hideTranslationStatus();
                     self.cues = cloneCues(translatedCues);
                     self.loading = false;
 
@@ -1968,15 +2155,17 @@
                     if (!fromCache) notify('Автоперевод готов');
                     self.start();
                 }, function (xhr) {
-                    if (self.current !== item) return;
+                    if (self.requestId !== requestId || self.current !== item) return;
 
+                    hideTranslationStatus();
                     logDebug('renderer.selectTranslated error', xhr && (xhr.status || xhr.message));
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
                     self.disable();
                 });
             }, function (xhr) {
-                if (self.current !== item) return;
+                if (self.requestId !== requestId || self.current !== item) return;
 
+                hideTranslationStatus();
                 logDebug('renderer.selectTranslated fetch error', xhr && xhr.status);
                 notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
                 self.disable();
@@ -2027,9 +2216,11 @@
                 logDebug('renderer.disable', this.current && this.current.url);
             }
 
+            this.requestId++;
             clearInterval(this.timer);
             subtitleNetwork.clear();
             translationNetwork.clear();
+            hideTranslationStatus();
 
             this.timer = 0;
             this.cues = [];

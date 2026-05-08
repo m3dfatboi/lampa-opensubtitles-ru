@@ -22,12 +22,14 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v2-service-old-url';
+    var PLUGIN_VERSION = 'v3-service-old-url-cache';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
     var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
     var SERVICE_POLL_INTERVAL = 2500;
     var SERVICE_POLL_TIMEOUT = 180000;
+    var TRANSLATION_CACHE_LIMIT = 5;
+    var TRANSLATION_CACHE_MAX_BYTES = 1200000;
 
     var EXTRA_LANGUAGE_META = {
         jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
@@ -73,6 +75,10 @@
     var manualOverride = null;
     var actionWasPicked = false;
     var latestPanelSubs = [];
+    var translationMemory = {};
+    var translationPending = {};
+    var translationStatusNode = null;
+    var translationStatusTextNode = null;
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -1557,6 +1563,153 @@
             .replace(/&amp;/g, '&');
     }
 
+    function showTranslationStatus(text) {
+        if (typeof document === 'undefined' || !document.createElement || !document.body) return;
+
+        if (!translationStatusNode) {
+            translationStatusNode = document.createElement('div');
+            translationStatusNode.className = 'opensubtitles-translation-status';
+            translationStatusNode.style.cssText = [
+                'position:fixed',
+                'left:50%',
+                'bottom:7.5em',
+                'transform:translateX(-50%)',
+                'z-index:2147483647',
+                'max-width:84vw',
+                'padding:0.85em 1.2em',
+                'border-radius:0.45em',
+                'background:rgba(13,16,22,0.94)',
+                'color:#fff',
+                'font-size:1.05em',
+                'line-height:1.35',
+                'text-align:center',
+                'box-shadow:0 0.35em 1.4em rgba(0,0,0,0.38)',
+                'pointer-events:none'
+            ].join(';');
+
+            translationStatusTextNode = document.createElement('span');
+            translationStatusNode.appendChild(translationStatusTextNode);
+            document.body.appendChild(translationStatusNode);
+        }
+
+        if (translationStatusTextNode) translationStatusTextNode.textContent = text || '';
+    }
+
+    function updateTranslationStatus(text) {
+        showTranslationStatus(text);
+    }
+
+    function hideTranslationStatus() {
+        if (!translationStatusNode) return;
+
+        try {
+            if (translationStatusNode.parentNode) translationStatusNode.parentNode.removeChild(translationStatusNode);
+        }
+        catch (e) {}
+
+        translationStatusNode = null;
+        translationStatusTextNode = null;
+    }
+
+    function translationCacheKey(item, targetLang) {
+        return [
+            serviceBaseUrl(),
+            deviceId(),
+            item && (item.sourceUrl || item.url),
+            item && item.sourceLang,
+            targetLang || selectedLanguage().code
+        ].join('|');
+    }
+
+    function simpleHash(text) {
+        var hash = 5381;
+        var value = text || '';
+
+        for (var i = 0; i < value.length; i++) {
+            hash = ((hash << 5) + hash) + value.charCodeAt(i);
+            hash = hash & hash;
+        }
+
+        return (hash >>> 0).toString(36);
+    }
+
+    function cacheStorageKey(key) {
+        return PLUGIN_ID + '_translation_cache_' + simpleHash(key);
+    }
+
+    function cloneCues(cues) {
+        return (cues || []).map(function (cue) {
+            return {
+                start: cue.start,
+                end: cue.end,
+                text: cue.text
+            };
+        });
+    }
+
+    function cachedTranslation(key) {
+        var stored;
+
+        if (translationMemory[key] && translationMemory[key].length) return cloneCues(translationMemory[key]);
+
+        stored = storage(cacheStorageKey(key), null);
+
+        if (stored && stored.key === key && stored.cues && stored.cues.length) {
+            translationMemory[key] = cloneCues(stored.cues);
+            return cloneCues(stored.cues);
+        }
+
+        return null;
+    }
+
+    function removeStoredTranslation(id) {
+        var key = PLUGIN_ID + '_translation_cache_' + id;
+
+        try {
+            if (Lampa.Storage && Lampa.Storage.remove) Lampa.Storage.remove(key);
+            else if (window.localStorage) window.localStorage.removeItem(key);
+        }
+        catch (e) {}
+    }
+
+    function rememberTranslation(key, cues) {
+        var id = simpleHash(key);
+        var storageKey = cacheStorageKey(key);
+        var index = storage(PLUGIN_ID + '_translation_cache_index', []);
+        var entry = {
+            key: key,
+            cues: cloneCues(cues),
+            created: Date.now(),
+            version: PLUGIN_VERSION
+        };
+        var serialized;
+
+        translationMemory[key] = cloneCues(cues);
+
+        try { serialized = JSON.stringify(entry); }
+        catch (e) { return; }
+
+        if (!serialized || serialized.length > TRANSLATION_CACHE_MAX_BYTES) return;
+
+        index = Array.isArray(index) ? index.filter(function (item) {
+            return item && item.id !== id;
+        }) : [];
+
+        index.push({ id: id, created: entry.created });
+
+        while (index.length > TRANSLATION_CACHE_LIMIT) {
+            removeStoredTranslation(index.shift().id);
+        }
+
+        try {
+            Lampa.Storage.set(storageKey, entry);
+            Lampa.Storage.set(PLUGIN_ID + '_translation_cache_index', index);
+        }
+        catch (e2) {
+            logDebug('translation cache write failed', e2 && e2.message);
+        }
+    }
+
     function serviceBotLink(code) {
         var base = telegramBotUrl();
         var joiner = base.indexOf('?') >= 0 ? '&' : '?';
@@ -1728,7 +1881,44 @@
         });
     }
 
-    function startServiceTranslation(item, rawText, cues, progress, done, fail) {
+    function resolvePendingTranslation(cacheKey, cues, result) {
+        var pending = translationPending[cacheKey];
+
+        delete translationPending[cacheKey];
+
+        if (!pending) return;
+
+        rememberTranslation(cacheKey, cues);
+
+        pending.done.forEach(function (callback) {
+            callback(cloneCues(cues), result, false);
+        });
+    }
+
+    function rejectPendingTranslation(cacheKey, xhr) {
+        var pending = translationPending[cacheKey];
+
+        delete translationPending[cacheKey];
+
+        if (!pending) return;
+
+        pending.fail.forEach(function (callback) {
+            callback(xhr);
+        });
+    }
+
+    function emitPendingProgress(cacheKey, state) {
+        var pending = translationPending[cacheKey];
+
+        if (!pending) return;
+
+        pending.progress.forEach(function (callback) {
+            callback(state);
+        });
+    }
+
+    function startServiceTranslation(cacheKey, item, rawText, cues, progress, done, fail) {
+        var cached = cachedTranslation(cacheKey);
         var body = {
             device_id: deviceId(),
             plugin_version: PLUGIN_VERSION,
@@ -1743,21 +1933,59 @@
             }
         };
 
+        if (cached) {
+            done(cached, { cached: true }, true);
+            return;
+        }
+
+        if (translationPending[cacheKey]) {
+            translationPending[cacheKey].done.push(done);
+            translationPending[cacheKey].fail.push(fail);
+            if (progress) translationPending[cacheKey].progress.push(progress);
+            return;
+        }
+
+        translationPending[cacheKey] = {
+            done: [done],
+            fail: [fail],
+            progress: progress ? [progress] : []
+        };
+
         serviceRequest('/v1/translations', body, function (result) {
             var jobId = result && (result.job_id || result.id);
+            var translatedCues;
 
             if (result && (result.status === 'completed' || result.cues || result.subtitle_text || result.translation)) {
-                done(serviceCues(result), result);
+                translatedCues = serviceCues(result);
+                if (!translatedCues.length) {
+                    rejectPendingTranslation(cacheKey, { message: 'сервер вернул пустой перевод' });
+                    return;
+                }
+
+                resolvePendingTranslation(cacheKey, translatedCues, result);
                 return;
             }
 
             if (!jobId) {
-                fail({ message: 'сервер не вернул задачу перевода' });
+                rejectPendingTranslation(cacheKey, { message: 'сервер не вернул задачу перевода' });
                 return;
             }
 
-            pollServiceTranslation(jobId, progress, done, fail);
-        }, fail, {
+            pollServiceTranslation(jobId, function (state) {
+                emitPendingProgress(cacheKey, state);
+            }, function (translatedCues, pollResult) {
+                if (!translatedCues.length) {
+                    rejectPendingTranslation(cacheKey, { message: 'сервер вернул пустой перевод' });
+                    return;
+                }
+
+                resolvePendingTranslation(cacheKey, translatedCues, pollResult);
+            }, function (xhr) {
+                rejectPendingTranslation(cacheKey, xhr);
+            });
+        }, function (xhr) {
+            rejectPendingTranslation(cacheKey, xhr);
+        }, {
             timeout: 60000
         });
     }
@@ -1802,6 +2030,7 @@
         timer: 0,
         loading: false,
         lastText: null,
+        requestId: 0,
         select: function (item) {
             var self = this;
 
@@ -1852,6 +2081,9 @@
         selectTranslated: function (item) {
             var self = this;
             var targetLang = item.targetLang || selectedLanguage().code;
+            var cacheKey = translationCacheKey(item, targetLang);
+            var cached = cachedTranslation(cacheKey);
+            var requestId;
 
             logDebug('renderer.selectTranslated', item && item.url, item && item.sourceLang, '→', targetLang);
 
@@ -1862,25 +2094,78 @@
                 return;
             }
 
+            if (cached) {
+                self.disable(false);
+                self.current = item;
+                self.cues = cached;
+                self.loading = false;
+                self.lastText = null;
+                item.selected = true;
+                showSubtitleText('');
+                logDebug('renderer.selectTranslated: loaded from cache', cached.length, 'cues');
+                self.start();
+                return;
+            }
+
             if (self.current === item && (self.loading || self.cues.length)) {
                 logDebug('renderer.selectTranslated skipped: already current');
                 return;
             }
 
             self.disable(false);
+            self.requestId++;
+            requestId = self.requestId;
             self.current = item;
             self.loading = true;
             self.lastText = null;
             item.selected = true;
 
             showSubtitleText('');
+            showTranslationStatus('Перевожу субтитры целиком. Субтитры появятся после полной готовности.');
+
+            if (translationPending[cacheKey]) {
+                logDebug('renderer.selectTranslated: joining pending translation');
+                updateTranslationStatus('Перевод уже идет. Субтитры появятся после полной готовности.');
+
+                translationPending[cacheKey].done.push(function (translatedCues, result, fromCache) {
+                    if (self.requestId !== requestId || self.current !== item) return;
+
+                    hideTranslationStatus();
+                    self.cues = cloneCues(translatedCues);
+                    self.loading = false;
+
+                    if (!self.cues.length) {
+                        notify(PLUGIN_TITLE + ': сервер вернул пустой перевод');
+                        self.disable();
+                        return;
+                    }
+
+                    if (!fromCache) notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
+                    self.start();
+                });
+                translationPending[cacheKey].fail.push(function (xhr) {
+                    if (self.requestId !== requestId || self.current !== item) return;
+
+                    hideTranslationStatus();
+                    logDebug('renderer.selectTranslated pending error', xhr && (xhr.status || xhr.message));
+                    notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
+                    self.disable();
+                });
+                translationPending[cacheKey].progress.push(function (state) {
+                    if (self.requestId !== requestId || self.current !== item) return;
+
+                    updateTranslationStatus('Перевожу субтитры целиком: ' + state + '. Субтитры появятся после полной готовности.');
+                });
+                return;
+            }
+
             notify('Отправляю субтитры на перевод...');
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.sourceUrl || item.url, function (text) {
                 var sourceCues;
 
-                if (self.current !== item) {
+                if (self.requestId !== requestId || self.current !== item) {
                     logDebug('renderer.selectTranslated fetch ignored: current changed');
                     return;
                 }
@@ -1890,17 +2175,19 @@
                 logDebug('renderer.selectTranslated parsed', sourceCues.length, 'source cues from', (text || '').length, 'chars');
 
                 if (!sourceCues.length) {
+                    hideTranslationStatus();
                     notify(PLUGIN_TITLE + ': файл субтитров пустой или не распознан');
                     self.disable();
                     return;
                 }
 
-                startServiceTranslation(item, text || '', sourceCues, function (state) {
-                    if (self.current === item) notify('Перевод субтитров: ' + state);
-                }, function (translatedCues, result) {
-                    if (self.current !== item) return;
+                startServiceTranslation(cacheKey, item, text || '', sourceCues, function (state) {
+                    if (self.requestId === requestId && self.current === item) updateTranslationStatus('Перевожу субтитры целиком: ' + state + '. Субтитры появятся после полной готовности.');
+                }, function (translatedCues, result, fromCache) {
+                    if (self.requestId !== requestId || self.current !== item) return;
 
-                    self.cues = translatedCues;
+                    hideTranslationStatus();
+                    self.cues = cloneCues(translatedCues);
                     self.loading = false;
 
                     if (!self.cues.length) {
@@ -1909,18 +2196,20 @@
                         return;
                     }
 
-                    notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
+                    if (!fromCache) notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
                     self.start();
                 }, function (xhr) {
-                    if (self.current !== item) return;
+                    if (self.requestId !== requestId || self.current !== item) return;
 
+                    hideTranslationStatus();
                     logDebug('renderer.selectTranslated error', xhr && (xhr.status || xhr.message));
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
                     self.disable();
                 });
             }, function (xhr) {
-                if (self.current !== item) return;
+                if (self.requestId !== requestId || self.current !== item) return;
 
+                hideTranslationStatus();
                 logDebug('renderer.selectTranslated fetch error', xhr && xhr.status);
                 notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
                 self.disable();
@@ -1971,9 +2260,11 @@
                 logDebug('renderer.disable', this.current && this.current.url);
             }
 
+            this.requestId++;
             clearInterval(this.timer);
             subtitleNetwork.clear();
             serviceNetwork.clear();
+            hideTranslationStatus();
 
             this.timer = 0;
             this.cues = [];
