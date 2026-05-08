@@ -28,6 +28,7 @@
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
     var SERVICE_POLL_INTERVAL = 2500;
     var SERVICE_POLL_TIMEOUT = 180000;
+    var SERVICE_CREDIT_CHARS = 10000;
 
     var EXTRA_LANGUAGE_META = {
         jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
@@ -75,6 +76,7 @@
     var latestPanelSubs = [];
     var translationMemory = {};
     var translationPending = {};
+    var translationPrefetched = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
 
@@ -1209,6 +1211,7 @@
                 sourceUrl: readable.url,
                 sourceText: readable.text,
                 sourceCues: readable.cues,
+                sourceChars: cuesCharCount(readable.cues) || (readable.text ? readable.text.length : 0),
                 sourceItem: item,
                 sourceLang: sourceLang,
                 targetLang: target.code,
@@ -1588,7 +1591,7 @@
     function createTranslatedSubtitleItem(item, index) {
         var sourceName = languageName(item.sourceLang);
         var target = selectedLanguage();
-        var title = item.native ? 'ИИ перевод встроенных с ' + sourceName : 'ИИ перевод с ' + sourceName;
+        var baseTitle = item.native ? 'ИИ перевод встроенных с ' + sourceName : 'ИИ перевод с ' + sourceName;
         var sub = {
             stremio: true,
             translated: true,
@@ -1597,12 +1600,13 @@
             index: index,
             language: target.code,
             label: 'ИИ перевод',
-            title: title,
+            title: baseTitle + translatedItemTitleSuffix(item),
             url: item.url,
             sourceKey: item.sourceKey,
             sourceUrl: item.sourceUrl || (item.native ? '' : item.url),
             sourceText: item.sourceText,
             sourceCues: item.sourceCues,
+            sourceChars: item.sourceChars,
             sourceItem: item.sourceItem,
             sourceLang: item.sourceLang,
             targetLang: target.code,
@@ -1873,6 +1877,7 @@
 
         externalTranslated.forEach(function (item) {
             mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
+            prefetchTranslationSource(item);
         });
 
         if (!hasResults && !hasTranslated) {
@@ -1913,31 +1918,52 @@
             .replace(/&amp;/g, '&');
     }
 
+    function ensureTranslationStatusStyles() {
+        if (typeof document === 'undefined' || !document.createElement || !document.head) return;
+        if (document.getElementById('opensubtitles-translation-status-styles')) return;
+
+        var style = document.createElement('style');
+        style.id = 'opensubtitles-translation-status-styles';
+        style.textContent =
+            '@keyframes opensubtitles-spin{to{transform:rotate(360deg)}}' +
+            '@keyframes opensubtitles-status-fade{from{opacity:0;transform:translate(-50%,-50%) scale(0.96)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}' +
+            '@keyframes opensubtitles-pulse{0%,100%{opacity:0.55}50%{opacity:1}}' +
+            '.opensubtitles-translation-status{' +
+                'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
+                'z-index:2147483647;min-width:18em;max-width:84vw;' +
+                'padding:1.6em 1.8em;border-radius:0.7em;' +
+                'background:rgba(13,16,22,0.94);color:#fff;' +
+                'font-size:1.05em;line-height:1.35;text-align:center;' +
+                'box-shadow:0 1em 2.6em rgba(0,0,0,0.55);' +
+                'pointer-events:none;' +
+                'animation:opensubtitles-status-fade 0.18s ease-out;' +
+            '}' +
+            '.opensubtitles-translation-status__spinner{' +
+                'display:block;margin:0 auto 0.85em;width:2.2em;height:2.2em;' +
+                'border-radius:50%;' +
+                'border:0.22em solid rgba(255,255,255,0.18);' +
+                'border-top-color:#7cc4ff;' +
+                'animation:opensubtitles-spin 0.85s linear infinite;' +
+            '}' +
+            '.opensubtitles-translation-status__text{display:block;animation:opensubtitles-pulse 2.2s ease-in-out infinite}';
+        document.head.appendChild(style);
+    }
+
     function showTranslationStatus(text) {
         if (typeof document === 'undefined' || !document.createElement || !document.body) return;
+
+        ensureTranslationStatusStyles();
 
         if (!translationStatusNode) {
             translationStatusNode = document.createElement('div');
             translationStatusNode.className = 'opensubtitles-translation-status';
-            translationStatusNode.style.cssText = [
-                'position:fixed',
-                'left:50%',
-                'bottom:7.5em',
-                'transform:translateX(-50%)',
-                'z-index:2147483647',
-                'max-width:84vw',
-                'padding:0.85em 1.2em',
-                'border-radius:0.45em',
-                'background:rgba(13,16,22,0.94)',
-                'color:#fff',
-                'font-size:1.05em',
-                'line-height:1.35',
-                'text-align:center',
-                'box-shadow:0 0.35em 1.4em rgba(0,0,0,0.38)',
-                'pointer-events:none'
-            ].join(';');
+
+            var spinner = document.createElement('div');
+            spinner.className = 'opensubtitles-translation-status__spinner';
+            translationStatusNode.appendChild(spinner);
 
             translationStatusTextNode = document.createElement('span');
+            translationStatusTextNode.className = 'opensubtitles-translation-status__text';
             translationStatusNode.appendChild(translationStatusTextNode);
             document.body.appendChild(translationStatusNode);
         }
@@ -1988,6 +2014,86 @@
 
     function rememberTranslation(key, cues) {
         translationMemory[key] = cloneCues(cues);
+    }
+
+    function isAccountUnlimited() {
+        return persistentStorage(PLUGIN_ID + '_account_unlimited', 'false') === 'true';
+    }
+
+    function cuesCharCount(cues) {
+        if (!cues || !cues.length) return 0;
+        var total = 0;
+        for (var i = 0; i < cues.length; i++) {
+            total += cueTextToPlain(cues[i] && cues[i].text || '').length;
+        }
+        return total;
+    }
+
+    function estimateCreditsForChars(chars) {
+        if (!chars) return 0;
+        return Math.max(1, Math.ceil(chars / SERVICE_CREDIT_CHARS));
+    }
+
+    function prefetchTranslationSource(item) {
+        if (!item || !item.translated) return;
+        if (item.sourceChars > 0 || (item.sourceCues && item.sourceCues.length)) return;
+
+        var url = item.sourceUrl || item.url;
+        if (!url || /^native:\/\//i.test(url)) return;
+        if (translationPrefetched[url] === 'pending' || translationPrefetched[url] === 'failed') return;
+
+        if (translationPrefetched[url] && typeof translationPrefetched[url] === 'object') {
+            var prev = translationPrefetched[url];
+            item.sourceText = prev.text;
+            item.sourceCues = prev.cues;
+            item.sourceChars = prev.chars;
+            return;
+        }
+
+        translationPrefetched[url] = 'pending';
+
+        subtitleNetwork.timeout(20000);
+        subtitleNetwork.silent(url, function (text) {
+            var parsed = parseSubtitles(text || '');
+            var chars = cuesCharCount(parsed) || (text || '').length;
+
+            translationPrefetched[url] = {
+                text: text || '',
+                cues: parsed,
+                chars: chars
+            };
+
+            item.sourceText = text || '';
+            item.sourceCues = parsed;
+            item.sourceChars = chars;
+
+            try { installToPanel(); }
+            catch (e) {}
+        }, function () {
+            translationPrefetched[url] = 'failed';
+        }, false, {
+            dataType: 'text'
+        });
+    }
+
+    function translatedItemTitleSuffix(item) {
+        if (!item || !item.translated) return '';
+
+        var targetLang = item.targetLang || selectedLanguage().code;
+        var key = translationCacheKey(item, targetLang);
+
+        if (translationMemory[key] && translationMemory[key].length) return ' · ✓ в кеше';
+
+        var chars = item.sourceChars;
+        if (!chars) {
+            if (item.sourceCues && item.sourceCues.length) chars = cuesCharCount(item.sourceCues);
+            else if (item.sourceText) chars = item.sourceText.length;
+        }
+
+        if (!chars) return '';
+
+        var credits = estimateCreditsForChars(chars);
+        return ' · ≈' + credits + ' кр.';
     }
 
     function serviceBotLink(code) {
@@ -2140,6 +2246,19 @@
         });
     }
 
+    function mediaYear(card) {
+        var raw = card && (card.release_date || card.first_air_date || card.year) || '';
+        var match = String(raw).match(/(\d{4})/);
+        return match ? match[1] : '';
+    }
+
+    function mediaGenres(card) {
+        if (!card || !card.genres || !card.genres.length) return [];
+        return card.genres.map(function (genre) {
+            return genre && (genre.name || genre.title || '') || '';
+        }).filter(Boolean).slice(0, 5);
+    }
+
     function serviceMediaInfo() {
         var card = activeCard(lastPlayerData);
         var episode = parseEpisode(lastPlayerData || {});
@@ -2151,6 +2270,8 @@
             title: card && (card.title || card.name) || lastPlayerData && lastPlayerData.title || '',
             original_title: card && (card.original_title || card.original_name) || '',
             original_language: originalLanguageCode(card),
+            year: mediaYear(card),
+            genres: mediaGenres(card),
             season: episode.season,
             episode: episode.episode
         };
@@ -2236,6 +2357,9 @@
         pending.done.forEach(function (callback) {
             callback(cloneCues(cues), result, false);
         });
+
+        try { installToPanel(); }
+        catch (e) {}
     }
 
     function rejectPendingTranslation(cacheKey, xhr) {

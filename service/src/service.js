@@ -83,10 +83,12 @@ export class TranslationQueue {
       }
 
       const sourceCues = JSON.parse(job.cues_json || '[]');
+      const media = JSON.parse(job.media_json || '{}');
       const translated = await this.translator.translate({
         cues: sourceCues,
         sourceLanguage: job.source_language,
         targetLanguage: job.target_language,
+        media,
         onProgress: (progress) => this.store.updateJobStatus(job.id, 'processing', progress),
         chunkCache: {
           get: (chunkKey) => this.store.getCachedTranslationChunk(job.cache_key, chunkKey),

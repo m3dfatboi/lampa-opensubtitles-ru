@@ -75,6 +75,28 @@ function translationItems(cues) {
   return normalizeCues(cues).map((cue, index) => ({ id: index, text: cue.text }));
 }
 
+function mediaContext(media) {
+  if (!media || typeof media !== 'object') return null;
+
+  const context = {};
+  const title = String(media.title || '').trim();
+  const originalTitle = String(media.original_title || '').trim();
+  const type = String(media.type || '').trim();
+  const year = String(media.year || '').trim();
+  const season = Number(media.season) || 0;
+  const episode = Number(media.episode) || 0;
+  const genres = Array.isArray(media.genres) ? media.genres.filter(Boolean).map(String).slice(0, 5) : [];
+
+  if (title) context.title = title;
+  if (originalTitle && originalTitle !== title) context.original_title = originalTitle;
+  if (type === 'series' || type === 'movie') context.type = type;
+  if (year) context.year = year;
+  if (season && episode) context.episode = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+  if (genres.length) context.genres = genres;
+
+  return Object.keys(context).length ? context : null;
+}
+
 function buildChunks(cues, config) {
   const chunks = [];
   let current = [];
@@ -275,18 +297,19 @@ export class Translator {
     return `v1:${this.config.openRouter.model}:${sourceLanguage}:${targetLanguage}:${sourceHash}`;
   }
 
-  async translate({ cues, sourceLanguage, targetLanguage, onProgress, chunkCache }) {
+  async translate({ cues, sourceLanguage, targetLanguage, onProgress, chunkCache, media }) {
     if (!this.config.openRouter.apiKey) throw new HttpError(500, 'OpenRouter API key is not configured');
 
     const chunks = buildChunks(cues, this.config);
     const translatedItems = [];
+    const context = mediaContext(media);
 
     if (!chunks.length) throw new Error('empty subtitles');
     if (onProgress) onProgress(`0/${chunks.length}`);
 
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
-      const items = await this.translateChunkResilient(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length, chunkCache);
+      const items = await this.translateChunkResilient(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length, chunkCache, context);
       translatedItems.push(...items);
       if (onProgress) onProgress(`${index + 1}/${chunks.length}`);
       await sleep(50);
@@ -295,12 +318,12 @@ export class Translator {
     return applyTranslatedItems(cues, translatedItems);
   }
 
-  async translateChunkResilient(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, chunkCache) {
+  async translateChunkResilient(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, chunkCache, context) {
     const cached = await getCachedChunk(chunkCache, chunk);
     if (cached) return cached;
 
     try {
-      const items = await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal);
+      const items = await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, context);
       await saveCachedChunk(chunkCache, chunk, items);
       return items;
     }
@@ -311,7 +334,7 @@ export class Translator {
       const result = [];
 
       for (let index = 0; index < parts.length; index++) {
-        const partItems = await this.translateChunkResilient(parts[index], sourceLanguage, targetLanguage, `${chunkIndex}.${index + 1}`, chunkTotal, chunkCache);
+        const partItems = await this.translateChunkResilient(parts[index], sourceLanguage, targetLanguage, `${chunkIndex}.${index + 1}`, chunkTotal, chunkCache, context);
         result.push(...partItems);
       }
 
@@ -320,7 +343,7 @@ export class Translator {
     }
   }
 
-  async translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal) {
+  async translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, context) {
     const models = [this.config.openRouter.model];
     if (this.config.openRouter.enableFallback && this.config.openRouter.fallbackModel && this.config.openRouter.fallbackModel !== this.config.openRouter.model) {
       models.push(this.config.openRouter.fallbackModel);
@@ -329,7 +352,7 @@ export class Translator {
     let lastError = null;
     for (const model of models) {
       try {
-        return await this.translateChunk(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, model);
+        return await this.translateChunk(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, model, context);
       }
       catch (error) {
         lastError = error;
@@ -340,7 +363,7 @@ export class Translator {
     throw lastError || new Error('translation failed');
   }
 
-  async translateChunk(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, model) {
+  async translateChunk(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, model, context) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.openRouter.timeoutMs);
     const reasoning = openRouterReasoning(this.config);
@@ -382,13 +405,14 @@ export class Translator {
       messages: [
         {
           role: 'system',
-          content: 'You translate one sequential chunk from a subtitle file. Preserve cue order, count, line breaks, punctuation, names, tone, and meaning. Return only valid JSON.'
+          content: 'You translate one sequential chunk from a subtitle file. Preserve cue order, count, line breaks, punctuation, names, tone, and meaning. When media context is provided, use it to keep proper nouns, character and place names, in-universe terminology, era-appropriate register, and tone consistent with the work. Do not translate names of characters, places or titles unless the target language has an established localization. Return only valid JSON.'
         },
         {
           role: 'user',
           content: JSON.stringify({
             source_language: promptLanguageName(sourceLanguage),
             target_language: promptLanguageName(targetLanguage),
+            ...(context ? { media: context } : {}),
             chunk: chunkIndex,
             total_chunks: chunkTotal,
             instructions: 'Translate every item.text in this chunk. Keep the same numeric id for every item. Do not merge, split, skip, summarize, add commentary, or wrap in Markdown. Output exactly {"items":[{"id":number,"text":"translated text"}]}.',
