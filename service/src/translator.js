@@ -156,11 +156,19 @@ function translatedTextFromItem(item) {
 }
 
 function normalizeChunkItems(chunk, items) {
+  const expected = new Set(chunk.map((item) => String(item.id)));
+
   return (items || []).map((item, index) => {
     const fallbackId = chunk[index]?.id;
     if (typeof item === 'string') return { id: fallbackId, text: item };
     if (!item || typeof item !== 'object') return item;
-    if (typeof item.id !== 'undefined' || typeof item.index !== 'undefined' || typeof item.n !== 'undefined') return item;
+
+    const rawId = typeof item.id !== 'undefined' ? item.id : (typeof item.index !== 'undefined' ? item.index : item.n);
+    const numericId = Number(rawId);
+
+    if (expected.has(String(rawId))) return { ...item, id: rawId };
+    if (Number.isFinite(numericId) && numericId >= 0 && numericId < chunk.length && chunk[numericId]) return { ...item, id: chunk[numericId].id };
+
     return { ...item, id: fallbackId };
   });
 }
@@ -170,7 +178,7 @@ function translatedCountForChunk(chunk, items) {
   let count = 0;
 
   (items || []).forEach((item, index) => {
-    const id = translatedIdFromItem(item, index);
+    const id = translatedIdFromItem(item, chunk[index]?.id);
     const text = translatedTextFromItem(item);
     if (expected.has(String(id)) && typeof text === 'string' && text.trim()) count++;
   });
@@ -204,6 +212,15 @@ function applyTranslatedItems(cues, items) {
   return translated;
 }
 
+function isSplittableTranslationError(error) {
+  return /обрезал ответ|не удалось разобрать|неполный перевод|bad translation format|empty response/i.test(error?.message || '');
+}
+
+function splitChunk(chunk) {
+  const middle = Math.max(1, Math.floor(chunk.length / 2));
+  return [chunk.slice(0, middle), chunk.slice(middle)].filter((part) => part.length);
+}
+
 export class Translator {
   constructor(config) {
     this.config = config;
@@ -225,13 +242,32 @@ export class Translator {
 
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
-      const items = await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length);
+      const items = await this.translateChunkResilient(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length);
       translatedItems.push(...items);
       if (onProgress) onProgress(`${index + 1}/${chunks.length}`);
       await sleep(50);
     }
 
     return applyTranslatedItems(cues, translatedItems);
+  }
+
+  async translateChunkResilient(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal) {
+    try {
+      return await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal);
+    }
+    catch (error) {
+      if (chunk.length <= 1 || !isSplittableTranslationError(error)) throw error;
+
+      const parts = splitChunk(chunk);
+      const result = [];
+
+      for (let index = 0; index < parts.length; index++) {
+        const partItems = await this.translateChunkResilient(parts[index], sourceLanguage, targetLanguage, `${chunkIndex}.${index + 1}`, chunkTotal);
+        result.push(...partItems);
+      }
+
+      return result;
+    }
   }
 
   async translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal) {
@@ -261,6 +297,41 @@ export class Translator {
       model,
       temperature: this.config.openRouter.temperature,
       max_tokens: maxTokens(chunk, this.config),
+      reasoning: {
+        effort: 'none',
+        exclude: true
+      },
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'subtitle_translation',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: {
+                      anyOf: [
+                        { type: 'integer' },
+                        { type: 'string' }
+                      ]
+                    },
+                    text: { type: 'string' }
+                  },
+                  required: ['id', 'text'],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ['items'],
+            additionalProperties: false
+          }
+        }
+      },
       messages: [
         {
           role: 'system',

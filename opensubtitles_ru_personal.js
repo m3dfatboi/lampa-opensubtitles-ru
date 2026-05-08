@@ -22,10 +22,10 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v15-personal-safe-chunks';
+    var PLUGIN_VERSION = 'v17-personal-split-retry';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-    var DEFAULT_OPENROUTER_MODEL = 'openrouter/auto';
+    var DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash';
     var TRANSLATION_CACHE_LIMIT = 5;
     var TRANSLATION_CACHE_MAX_BYTES = 1200000;
     var TRANSLATION_CHUNK_MAX_CUES = 80;
@@ -371,7 +371,12 @@
     }
 
     function openRouterModel() {
-        return (storage(PLUGIN_ID + '_openrouter_model', DEFAULT_OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
+        var model = (storage(PLUGIN_ID + '_openrouter_model', DEFAULT_OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
+
+        if (/^openrouter\/auto$/i.test(model)) return DEFAULT_OPENROUTER_MODEL;
+        if (/^openai\/gpt-5\.4-pro/i.test(model)) return DEFAULT_OPENROUTER_MODEL;
+
+        return model;
     }
 
     function activeCard(data) {
@@ -1768,6 +1773,41 @@
             model: openRouterModel(),
             temperature: 0.1,
             max_tokens: translationMaxTokens(chunk),
+            reasoning: {
+                effort: 'none',
+                exclude: true
+            },
+            response_format: {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'subtitle_translation',
+                    strict: true,
+                    schema: {
+                        type: 'object',
+                        properties: {
+                            items: {
+                                type: 'array',
+                                items: {
+                                    type: 'object',
+                                    properties: {
+                                        id: {
+                                            anyOf: [
+                                                { type: 'integer' },
+                                                { type: 'string' }
+                                            ]
+                                        },
+                                        text: { type: 'string' }
+                                    },
+                                    required: ['id', 'text'],
+                                    additionalProperties: false
+                                }
+                            }
+                        },
+                        required: ['items'],
+                        additionalProperties: false
+                    }
+                }
+            },
             messages: [
                 {
                     role: 'system',
@@ -1815,21 +1855,39 @@
     }
 
     function normalizeChunkItems(chunk, items) {
+        var expected = {};
+
+        chunk.forEach(function (chunkItem) {
+            expected[String(chunkItem.id)] = true;
+        });
+
         return (items || []).map(function (item, index) {
             var fallbackId = chunk[index] && chunk[index].id;
+            var rawId;
+            var numericId;
             var copy;
             var key;
 
             if (typeof item === 'string') return { id: fallbackId, text: item };
             if (!item || typeof item !== 'object') return item;
 
-            if (typeof item.id !== 'undefined' || typeof item.index !== 'undefined' || typeof item.n !== 'undefined') return item;
-
             copy = {};
             for (key in item) {
                 if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key];
             }
-            copy.id = fallbackId;
+
+            rawId = typeof item.id !== 'undefined' ? item.id : (typeof item.index !== 'undefined' ? item.index : item.n);
+            numericId = Number(rawId);
+
+            if (expected[String(rawId)]) {
+                copy.id = rawId;
+            }
+            else if (Number.isFinite(numericId) && numericId >= 0 && numericId < chunk.length && chunk[numericId]) {
+                copy.id = chunk[numericId].id;
+            }
+            else {
+                copy.id = fallbackId;
+            }
 
             return copy;
         });
@@ -1844,13 +1902,78 @@
         });
 
         (items || []).forEach(function (item, index) {
-            var id = translatedIdFromItem(item, index);
+            var id = translatedIdFromItem(item, chunk[index] && chunk[index].id);
             var text = translatedTextFromItem(item);
 
             if (expected[String(id)] && typeof text === 'string' && text.trim()) count++;
         });
 
         return count;
+    }
+
+    function isSplittableTranslationError(xhr) {
+        var message = xhr && xhr.message || '';
+
+        return /обрезал ответ|не удалось разобрать|неполный перевод|bad translation format|empty response/i.test(message);
+    }
+
+    function splitChunk(chunk) {
+        var middle = Math.max(1, Math.floor(chunk.length / 2));
+
+        return [
+            chunk.slice(0, middle),
+            chunk.slice(middle)
+        ].filter(function (part) {
+            return part.length;
+        });
+    }
+
+    function translateCueChunkResilient(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
+        translateCueChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, function (items) {
+            items = normalizeChunkItems(chunk, items);
+
+            if (translatedCountForChunk(chunk, items) >= Math.max(1, Math.floor(chunk.length * 0.95))) {
+                done(items);
+                return;
+            }
+
+            if (chunk.length <= 1) {
+                fail({ message: 'OpenRouter вернул неполный перевод на части ' + chunkIndex + ' из ' + chunkTotal + ', перевод остановлен' });
+                return;
+            }
+
+            translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
+        }, function (xhr) {
+            if (chunk.length > 1 && isSplittableTranslationError(xhr)) {
+                translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
+                return;
+            }
+
+            fail(xhr);
+        });
+    }
+
+    function translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
+        var parts = splitChunk(chunk);
+        var result = [];
+        var partIndex = 0;
+
+        function nextPart() {
+            var part = parts[partIndex];
+
+            if (!part) {
+                done(result);
+                return;
+            }
+
+            translateCueChunkResilient(part, sourceLang, targetLang, chunkIndex + '.' + (partIndex + 1), chunkTotal, function (items) {
+                result = result.concat(items || []);
+                partIndex++;
+                nextPart();
+            }, fail);
+        }
+
+        nextPart();
     }
 
     function translateCueFile(cues, sourceLang, targetLang, progress, done, fail) {
@@ -1866,14 +1989,7 @@
                 return;
             }
 
-            translateCueChunk(chunk, sourceLang, targetLang, index + 1, chunks.length, function (items) {
-                items = normalizeChunkItems(chunk, items);
-
-                if (translatedCountForChunk(chunk, items) < Math.max(1, Math.floor(chunk.length * 0.95))) {
-                    fail({ message: 'OpenRouter вернул неполный перевод на части ' + (index + 1) + ' из ' + chunks.length + ', перевод остановлен' });
-                    return;
-                }
-
+            translateCueChunkResilient(chunk, sourceLang, targetLang, index + 1, chunks.length, function (items) {
                 translatedItems = translatedItems.concat(items || []);
                 index++;
 

@@ -15,21 +15,21 @@
 Рекомендуемая production-настройка:
 
 ```env
-TRANSLATION_MODEL=openai/gpt-5.1
-TRANSLATION_FALLBACK_MODEL=openai/gpt-5.2
+TRANSLATION_MODEL=google/gemini-2.5-flash
+TRANSLATION_FALLBACK_MODEL=google/gemini-2.5-pro
 TRANSLATION_TEMPERATURE=0.1
 ```
 
-Причина: `openai/gpt-5.1` находится в топовом классе качества, но заметно дешевле `openai/gpt-5.2` на output-токенах. `openai/gpt-5.2` лучше оставить fallback-моделью для повторной попытки, если основной ответ пришел в плохом формате или перевод не прошел валидацию.
+Причина: для субтитров нужен не максимальный reasoning, а стабильный JSON и дешевая генерация большого output. `google/gemini-2.5-flash` стоит в разы дешевле топовых reasoning-моделей и подходит как основная модель. `google/gemini-2.5-pro` лучше держать fallback-моделью для повторной попытки, если основная модель пришла в плохом формате или перевод не прошел валидацию.
 
 Если нужен максимально премиальный режим любой ценой:
 
 ```env
-TRANSLATION_MODEL=openai/gpt-5.2
-TRANSLATION_FALLBACK_MODEL=anthropic/claude-sonnet-4.5
+TRANSLATION_MODEL=google/gemini-2.5-pro
+TRANSLATION_FALLBACK_MODEL=openai/gpt-5.4-mini
 ```
 
-Тарифы ниже рассчитаны так, чтобы выдержать и дорогой режим `gpt-5.2`.
+Не использовать `openrouter/auto` для production: он может выбрать слишком дорогую модель вроде `openai/gpt-5.4-pro`.
 
 ## Экономика кредитов
 
@@ -37,10 +37,9 @@ TRANSLATION_FALLBACK_MODEL=anthropic/claude-sonnet-4.5
 
 | Модель | Input | Output |
 | --- | ---: | ---: |
-| `openai/gpt-5.2` | $1.75 / 1M tokens | $14.00 / 1M tokens |
-| `openai/gpt-5.1` | $1.25 / 1M tokens | $10.00 / 1M tokens |
+| `google/gemini-2.5-flash` | $0.30 / 1M tokens | $2.50 / 1M tokens |
 | `google/gemini-2.5-pro` | $1.25 / 1M tokens | $10.00 / 1M tokens |
-| `anthropic/claude-sonnet-4.5` | $3.00 / 1M tokens | $15.00 / 1M tokens |
+| `openai/gpt-5.4-pro` | $30.00 / 1M tokens | $180.00 / 1M tokens |
 
 Единица списания:
 
@@ -50,12 +49,12 @@ minimum_charge = 1 кредит
 credits = ceil(source_characters / 10000)
 ```
 
-Консервативная себестоимость 1 кредита на `gpt-5.2`:
+Консервативная себестоимость 1 кредита на `gemini-2.5-flash`:
 
 - 10 000 символов исходника примерно 2 500-3 000 input tokens.
 - Перевод на русский примерно 3 000-3 800 output tokens.
-- С учетом overhead batch-промптов: около $0.045-$0.060.
-- При курсе с запасом 100 ₽/$: около 4.5-6 ₽ за кредит.
+- С учетом overhead batch-промптов: около $0.010-$0.013.
+- При курсе с запасом 100 ₽/$: около 1.0-1.3 ₽ за кредит.
 
 В расчет тарифа заложить:
 

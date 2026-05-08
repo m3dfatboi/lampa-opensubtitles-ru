@@ -36,6 +36,8 @@ TELEGRAM_BOT_USERNAME=...
 ADMIN_TELEGRAM_IDS=ваш_telegram_id
 UNLIMITED_TELEGRAM_IDS=ваш_telegram_id
 OPENROUTER_API_KEY=...
+TRANSLATION_MODEL=google/gemini-2.5-flash
+TRANSLATION_FALLBACK_MODEL=google/gemini-2.5-pro
 ```
 
 Для оплат:

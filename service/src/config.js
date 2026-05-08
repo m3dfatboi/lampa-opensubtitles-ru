@@ -65,6 +65,15 @@ function packagesEnv() {
     .filter(Boolean);
 }
 
+function safeTranslationModel(value, fallback) {
+  const model = (value || fallback).trim() || fallback;
+
+  if (/^openrouter\/auto$/i.test(model)) return fallback;
+  if (/^openai\/gpt-5\.4-pro/i.test(model)) return fallback;
+
+  return model;
+}
+
 export function createConfig(rootDir = process.cwd()) {
   loadDotEnv(path.join(rootDir, '.env'));
 
@@ -84,8 +93,8 @@ export function createConfig(rootDir = process.cwd()) {
     },
     openRouter: {
       apiKey: process.env.OPENROUTER_API_KEY || '',
-      model: process.env.TRANSLATION_MODEL || 'openai/gpt-5.1',
-      fallbackModel: process.env.TRANSLATION_FALLBACK_MODEL || '',
+      model: safeTranslationModel(process.env.TRANSLATION_MODEL, 'google/gemini-2.5-flash'),
+      fallbackModel: safeTranslationModel(process.env.TRANSLATION_FALLBACK_MODEL, 'google/gemini-2.5-pro'),
       enableFallback: boolEnv('TRANSLATION_ENABLE_FALLBACK', true),
       temperature: numberEnv('TRANSLATION_TEMPERATURE', 0.1),
       timeoutMs: intEnv('OPENROUTER_TIMEOUT_MS', 180000),
