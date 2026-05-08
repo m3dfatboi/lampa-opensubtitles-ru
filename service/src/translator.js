@@ -100,6 +100,16 @@ function maxTokens(items, config) {
   return Math.min(config.product.chunkMaxTokens, Math.max(2048, Math.ceil(chars / 1.25) + 2200));
 }
 
+function openRouterReasoning(config) {
+  const effort = String(config.openRouter.reasoningEffort || '').trim().toLowerCase();
+  const payload = {};
+
+  if (config.openRouter.reasoningExclude !== false) payload.exclude = true;
+  if (effort && !['none', 'off', 'false', '0'].includes(effort)) payload.effort = effort;
+
+  return Object.keys(payload).length ? payload : null;
+}
+
 function parseJsonFromText(text) {
   let content = String(text || '').trim();
   if (!content) throw new Error('empty response');
@@ -333,14 +343,11 @@ export class Translator {
   async translateChunk(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, model) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.openRouter.timeoutMs);
+    const reasoning = openRouterReasoning(this.config);
     const body = {
       model,
       temperature: this.config.openRouter.temperature,
       max_tokens: maxTokens(chunk, this.config),
-      reasoning: {
-        effort: 'none',
-        exclude: true
-      },
       response_format: {
         type: 'json_schema',
         json_schema: {
@@ -390,6 +397,8 @@ export class Translator {
         }
       ]
     };
+
+    if (reasoning) body.reasoning = reasoning;
 
     try {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

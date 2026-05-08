@@ -26,6 +26,8 @@ function testConfig(tmp) {
       fallbackModel: '',
       enableFallback: false,
       temperature: 0.1,
+      reasoningEffort: '',
+      reasoningExclude: true,
       timeoutMs: 1000,
       referer: 'https://example.test',
       title: 'test'
@@ -284,11 +286,13 @@ test('translator accepts local chunk ids returned by model', async () => {
   config.product.chunkMaxChars = 1000;
   const originalFetch = globalThis.fetch;
   const seenChunks = [];
+  const seenReasoning = [];
 
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
     const payload = JSON.parse(body.messages[1].content);
     seenChunks.push(payload.items.map((item) => item.id));
+    seenReasoning.push(body.reasoning);
 
     return {
       ok: true,
@@ -319,6 +323,7 @@ test('translator accepts local chunk ids returned by model', async () => {
     });
 
     assert.deepEqual(seenChunks, [[0, 1], [2]]);
+    assert.deepEqual(seenReasoning, [{ exclude: true }, { exclude: true }]);
     assert.deepEqual(translated.map((cue) => cue.text), ['RU one', 'RU two', 'RU three']);
   }
   finally {

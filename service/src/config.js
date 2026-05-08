@@ -101,6 +101,8 @@ export function createConfig(rootDir = process.cwd()) {
       fallbackModel: safeTranslationModel(process.env.TRANSLATION_FALLBACK_MODEL, 'google/gemini-2.5-pro'),
       enableFallback: boolEnv('TRANSLATION_ENABLE_FALLBACK', true),
       temperature: numberEnv('TRANSLATION_TEMPERATURE', 0.1),
+      reasoningEffort: (process.env.TRANSLATION_REASONING_EFFORT || '').trim().toLowerCase(),
+      reasoningExclude: boolEnv('TRANSLATION_REASONING_EXCLUDE', true),
       timeoutMs: intEnv('OPENROUTER_TIMEOUT_MS', 180000),
       referer: process.env.OPENROUTER_REFERER || 'https://m3dfatboi.github.io/lampa-opensubtitles-ru/',
       title: process.env.OPENROUTER_TITLE || 'Lampa OpenSubtitles Translate'
