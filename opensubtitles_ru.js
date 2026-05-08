@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v8-service-opensubtitles-title';
+    var PLUGIN_VERSION = 'v9-service-hidden-endpoints';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
     var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
@@ -298,34 +298,6 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_service_url',
-                type: 'input',
-                values: '',
-                placeholder: SERVICE_API_BASE,
-                default: SERVICE_API_BASE
-            },
-            field: {
-                name: 'Сервер перевода'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_ID,
-            param: {
-                name: PLUGIN_ID + '_telegram_bot',
-                type: 'input',
-                values: '',
-                placeholder: TELEGRAM_BOT_URL,
-                default: TELEGRAM_BOT_URL
-            },
-            field: {
-                name: 'Telegram бот'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_ID,
-            param: {
                 name: PLUGIN_ID + '_connect',
                 type: 'button'
             },
@@ -378,11 +350,11 @@
     }
 
     function serviceBaseUrl() {
-        return ((storage(PLUGIN_ID + '_service_url', SERVICE_API_BASE) || SERVICE_API_BASE) + '').trim().replace(/\/+$/, '');
+        return (SERVICE_API_BASE || '').trim().replace(/\/+$/, '');
     }
 
     function telegramBotUrl() {
-        return ((storage(PLUGIN_ID + '_telegram_bot', TELEGRAM_BOT_URL) || TELEGRAM_BOT_URL) + '').trim().replace(/\/+$/, '');
+        return (TELEGRAM_BOT_URL || '').trim().replace(/\/+$/, '');
     }
 
     function deviceToken() {

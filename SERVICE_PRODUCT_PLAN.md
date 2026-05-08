@@ -82,7 +82,7 @@ new_user_trial_credits = 3
 
 ## Backend API contract
 
-Плагин ожидает API base URL в настройке `Сервер перевода`. По умолчанию там placeholder, его нужно заменить на реальный URL перед публичным запуском.
+Плагин берет API base URL из константы `SERVICE_API_BASE` в `opensubtitles_ru.js`. Это не пользовательская настройка: перед публичным запуском нужно зашить реальный URL backend и ссылку на Telegram-бота в код плагина.
 
 ### Создание сессии привязки
 
@@ -93,7 +93,7 @@ Request:
 ```json
 {
   "device_id": "lmp-...",
-  "plugin_version": "v8-service-opensubtitles-title",
+  "plugin_version": "v9-service-hidden-endpoints",
   "platform": "android",
   "target_language": "rus"
 }
