@@ -22,8 +22,35 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v12-vimu-srt-url';
+    var PLUGIN_VERSION = 'v13-openrouter-translate';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
+    var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+    var DEFAULT_OPENROUTER_MODEL = 'openrouter/auto';
+    var TRANSLATION_BATCH_SIZE = 60;
+    var TRANSLATION_BATCH_CHARS = 6000;
+
+    var EXTRA_LANGUAGE_META = {
+        jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
+        chi: { iso2: 'zh', name: 'Chinese', aliases: ['zho', 'chinese', 'mandarin', 'cn'] },
+        kor: { iso2: 'ko', name: 'Korean', aliases: ['korean'] },
+        ara: { iso2: 'ar', name: 'Arabic', aliases: ['arabic'] },
+        hin: { iso2: 'hi', name: 'Hindi', aliases: ['hindi'] },
+        dut: { iso2: 'nl', name: 'Dutch', aliases: ['nld', 'dutch', 'nederlands'] },
+        swe: { iso2: 'sv', name: 'Swedish', aliases: ['swedish'] },
+        nor: { iso2: 'no', name: 'Norwegian', aliases: ['norwegian', 'nb', 'nn'] },
+        dan: { iso2: 'da', name: 'Danish', aliases: ['danish'] },
+        fin: { iso2: 'fi', name: 'Finnish', aliases: ['finnish'] },
+        rum: { iso2: 'ro', name: 'Romanian', aliases: ['ron', 'romanian'] },
+        cze: { iso2: 'cs', name: 'Czech', aliases: ['ces', 'czech'] },
+        hun: { iso2: 'hu', name: 'Hungarian', aliases: ['hungarian'] },
+        gre: { iso2: 'el', name: 'Greek', aliases: ['ell', 'greek'] },
+        heb: { iso2: 'he', name: 'Hebrew', aliases: ['hebrew', 'iw'] },
+        vie: { iso2: 'vi', name: 'Vietnamese', aliases: ['vietnamese'] },
+        tha: { iso2: 'th', name: 'Thai', aliases: ['thai'] },
+        ind: { iso2: 'id', name: 'Indonesian', aliases: ['indonesian'] },
+        may: { iso2: 'ms', name: 'Malay', aliases: ['msa', 'malay'] }
+    };
+    var LANGUAGE_META = buildLanguageMeta();
 
     if (!window.Lampa) return;
 
@@ -34,10 +61,12 @@
     var Lampa = window.Lampa;
     var network = new Lampa.Reguest();
     var subtitleNetwork = new Lampa.Reguest();
+    var translationNetwork = new Lampa.Reguest();
     var activePlayerId = 0;
     var lastPlayerData = null;
     var lastKnownSubs = [];
     var stremioSubs = [];
+    var translatedSubs = [];
     var searchState = 'idle';
     var injectingSubs = false;
     var nativeSubsSeen = false;
@@ -46,6 +75,26 @@
     var latestPanelSubs = [];
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
+
+    function buildLanguageMeta() {
+        var meta = {};
+
+        LANGUAGES.forEach(function (lang) {
+            meta[lang.code] = {
+                iso2: lang.iso2,
+                name: lang.name,
+                aliases: (lang.aliases || []).slice()
+            };
+        });
+
+        for (var code in EXTRA_LANGUAGE_META) {
+            if (Object.prototype.hasOwnProperty.call(EXTRA_LANGUAGE_META, code)) {
+                meta[code] = EXTRA_LANGUAGE_META[code];
+            }
+        }
+
+        return meta;
+    }
 
     function storage(name, fallback) {
         return Lampa.Storage.get(name, fallback);
@@ -87,12 +136,60 @@
         return findLanguage(storage(PLUGIN_ID + '_lang', DEFAULT_LANG)) || findLanguage(DEFAULT_LANG);
     }
 
+    function normalizeLangCode(rawLang) {
+        var normalized = (rawLang || '').toLowerCase().trim().replace(/_/g, '-');
+        var primary = normalized.split('-')[0];
+        var parts = normalized ? [normalized, primary] : [];
+
+        if (!normalized) return '';
+
+        for (var code in LANGUAGE_META) {
+            if (!Object.prototype.hasOwnProperty.call(LANGUAGE_META, code)) continue;
+
+            var meta = LANGUAGE_META[code];
+            var aliases = (meta.aliases || []).concat([code, meta.iso2, meta.name]);
+
+            for (var i = 0; i < aliases.length; i++) {
+                var alias = (aliases[i] || '').toLowerCase().replace(/_/g, '-');
+
+                if (parts.indexOf(alias) >= 0) return code;
+            }
+        }
+
+        return /^[a-z]{3}$/.test(primary) ? primary : '';
+    }
+
+    function languageName(code) {
+        var meta = LANGUAGE_META[normalizeLangCode(code) || code];
+
+        return meta && meta.name ? meta.name : (code || '').toUpperCase();
+    }
+
+    function promptLanguageName(code) {
+        var names = {
+            eng: 'English',
+            rus: 'Russian',
+            spa: 'Spanish',
+            fre: 'French',
+            ger: 'German',
+            ita: 'Italian',
+            por: 'Portuguese',
+            pol: 'Polish',
+            ukr: 'Ukrainian',
+            tur: 'Turkish'
+        };
+        var normalized = normalizeLangCode(code) || code;
+
+        return names[normalized] || languageName(normalized);
+    }
+
     function matchesLanguage(rawLang, lang) {
         if (!lang) return true;
 
         var normalized = (rawLang || '').toLowerCase().trim().replace(/_/g, '-');
         var primary = normalized.split('-')[0];
 
+        if (normalizeLangCode(rawLang) === lang.code) return true;
         if (normalized === lang.code || primary === lang.code) return true;
         if (normalized === lang.iso2 || primary === lang.iso2) return true;
         if (normalized === lang.name.toLowerCase()) return true;
@@ -185,6 +282,46 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
+                name: PLUGIN_ID + '_translate_enabled',
+                type: 'trigger',
+                default: true
+            },
+            field: {
+                name: 'Автоперевод через OpenRouter'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
+                name: PLUGIN_ID + '_openrouter_key',
+                type: 'input',
+                values: '',
+                placeholder: 'sk-or-...',
+                default: ''
+            },
+            field: {
+                name: 'OpenRouter API key'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
+                name: PLUGIN_ID + '_openrouter_model',
+                type: 'input',
+                values: '',
+                placeholder: DEFAULT_OPENROUTER_MODEL,
+                default: DEFAULT_OPENROUTER_MODEL
+            },
+            field: {
+                name: 'Модель OpenRouter'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
                 name: PLUGIN_ID + '_debug',
                 type: 'trigger',
                 default: false
@@ -199,7 +336,7 @@
         try {
             if (xhr && xhr.responseText) {
                 var json = JSON.parse(xhr.responseText);
-                return json.message || json.error || 'ошибка запроса';
+                return json.message || (json.error && (json.error.message || json.error)) || 'ошибка запроса';
             }
         }
         catch (e) {}
@@ -216,6 +353,18 @@
 
     function isEnabled() {
         return storageBool(PLUGIN_ID + '_enabled', true);
+    }
+
+    function translationEnabled() {
+        return storageBool(PLUGIN_ID + '_translate_enabled', true);
+    }
+
+    function openRouterKey() {
+        return (storage(PLUGIN_ID + '_openrouter_key', '') || '').trim();
+    }
+
+    function openRouterModel() {
+        return (storage(PLUGIN_ID + '_openrouter_model', DEFAULT_OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
     }
 
     function activeCard(data) {
@@ -380,6 +529,7 @@
         var card = activeCard(data);
 
         stremioSubs = [];
+        translatedSubs = [];
         searchState = 'searching';
         installToPanel();
 
@@ -457,16 +607,18 @@
 
             function finalize() {
                 stremioSubs = mapStremioResults(rawList);
+                translatedSubs = stremioSubs.length ? [] : mapTranslationCandidates(rawList, card);
 
-                logDebug('merged', rawList.length, '→ filtered', stremioSubs.length, 'for', selectedLanguage().code);
+                logDebug('merged', rawList.length, '→ filtered', stremioSubs.length, 'for', selectedLanguage().code, 'translate candidates', translatedSubs.length);
 
                 if (!anySuccess) searchState = 'error';
-                else searchState = stremioSubs.length ? 'ready' : 'empty';
+                else searchState = stremioSubs.length || translatedSubs.length ? 'ready' : 'empty';
 
                 installToPanel();
 
                 if (manualOverride) {
                     if (stremioSubs.length) notify('Найдено ' + stremioSubs.length + ' субтитров');
+                    else if (translatedSubs.length) notify(selectedLanguage().name + ' не найдены, доступен автоперевод с ' + languageName(translatedSubs[0].sourceLang));
                     else if (!anySuccess) notify(PLUGIN_TITLE + ': ошибка поиска');
                     else notify(selectedLanguage().name + ' не найдены для S' + manualOverride.season + 'E' + manualOverride.episode);
                 }
@@ -609,6 +761,80 @@
         });
 
         return mapped.slice(0, limit);
+    }
+
+    function itemLanguage(item) {
+        return normalizeLangCode(item && (item.lang || item.language || item.SubLanguageID || item.iso639 || item.langCode));
+    }
+
+    function itemScore(item) {
+        return parseInt(item && (item.g || item.score || item.SubDownloadsCnt || item.downloads) || '0', 10) || 0;
+    }
+
+    function originalLanguageCode(card) {
+        var raw = card && (card.original_language || card.original_lang || card.originalLanguage);
+
+        if (!raw && card && card.spoken_languages && card.spoken_languages.length) {
+            var spoken = card.spoken_languages[0] || {};
+            raw = spoken.iso_639_1 || spoken.iso_639_2 || spoken.name;
+        }
+
+        return normalizeLangCode(raw);
+    }
+
+    function translationSourceRank(code, original, target) {
+        var order = ['eng', 'jpn', 'fre', 'spa', 'ger', 'ita', 'por', 'kor', 'chi', 'pol', 'ukr', 'tur', 'dut', 'swe', 'nor', 'dan', 'fin'];
+        var index;
+
+        if (!code || code === target) return 999;
+        if (original && code === original) return 0;
+        if (code === 'eng') return original ? 1 : 0;
+
+        index = order.indexOf(code);
+
+        return index >= 0 ? index + 2 : 100;
+    }
+
+    function mapTranslationCandidates(results, card) {
+        if (!translationEnabled()) return [];
+
+        var target = selectedLanguage();
+        var original = originalLanguageCode(card);
+        var seen = {};
+        var mapped = [];
+
+        results.forEach(function (item) {
+            var sourceLang = itemLanguage(item);
+            var url = subtitleDownloadUrl(item && item.url);
+            var rank = translationSourceRank(sourceLang, original, target.code);
+
+            if (!url || !sourceLang || sourceLang === target.code || seen[url] || rank >= 999) return;
+
+            seen[url] = true;
+            mapped.push({
+                stremio: true,
+                translated: true,
+                source: 'stremio-opensubtitles-translated',
+                id: item.id || url,
+                url: url,
+                sourceUrl: url,
+                sourceLang: sourceLang,
+                targetLang: target.code,
+                lang: target.code,
+                langCode: target.code,
+                encoding: item.SubEncoding || item.subEncoding || '',
+                match: item.m || '',
+                score: itemScore(item),
+                rank: rank
+            });
+        });
+
+        mapped.sort(function (a, b) {
+            if (a.rank !== b.rank) return a.rank - b.rank;
+            return b.score - a.score;
+        });
+
+        return mapped.slice(0, 1);
     }
 
     function isOurSub(item) {
@@ -940,6 +1166,47 @@
         return sub;
     }
 
+    function createTranslatedSubtitleItem(item, index) {
+        var sourceName = languageName(item.sourceLang);
+        var target = selectedLanguage();
+        var sub = {
+            stremio: true,
+            translated: true,
+            source: 'stremio-opensubtitles-translated',
+            index: index,
+            language: target.code,
+            label: PLUGIN_TITLE + ' AI',
+            title: 'Автоперевод с ' + sourceName,
+            url: item.url,
+            sourceUrl: item.sourceUrl || item.url,
+            sourceLang: item.sourceLang,
+            targetLang: target.code,
+            onSelect: function () {
+                renderer.selectTranslated(sub);
+            }
+        };
+
+        Object.defineProperty(sub, 'selected', {
+            configurable: true,
+            set: function () {},
+            get: function () {
+                return Boolean(renderer.current && renderer.current.url === sub.url && renderer.current.translated);
+            }
+        });
+
+        Object.defineProperty(sub, 'mode', {
+            configurable: true,
+            set: function (value) {
+                if (value === 'showing') renderer.selectTranslated(sub);
+            },
+            get: function () {
+                return renderer.current && renderer.current.url === sub.url && renderer.current.translated ? 'showing' : 'disabled';
+            }
+        });
+
+        return sub;
+    }
+
     function dispatchSubs(list) {
         if (!Lampa.PlayerVideo || !Lampa.PlayerVideo.listener) return;
 
@@ -1157,6 +1424,7 @@
         });
 
         var hasResults = stremioSubs.length > 0;
+        var hasTranslated = translatedSubs.length > 0;
 
         if (renderer.current) {
             base.forEach(function (item) {
@@ -1174,6 +1442,11 @@
                 mixed.push(createSubtitleItem(item, nextIndex++));
             });
         }
+        else if (hasTranslated) {
+            translatedSubs.forEach(function (item) {
+                mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
+            });
+        }
         else {
             var status = statusSubtitle(nextIndex++);
             if (status) mixed.push(status);
@@ -1184,9 +1457,206 @@
             mixed.push(searchItem());
         }
 
-        logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' state=' + searchState);
+        logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
         if (mixed.length) dispatchSubs(mixed);
+    }
+
+    function cueTextToPlain(text) {
+        return unescapeHtml((text || '').replace(/<br\s*\/?>/gi, '\n'));
+    }
+
+    function unescapeHtml(text) {
+        var textarea;
+
+        if (!text) return '';
+
+        if (typeof document !== 'undefined' && document.createElement) {
+            textarea = document.createElement('textarea');
+            textarea.innerHTML = text;
+            return textarea.value;
+        }
+
+        return text
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#039;/g, "'")
+            .replace(/&amp;/g, '&');
+    }
+
+    function buildTranslationBatches(cues) {
+        var batches = [];
+        var current = [];
+        var chars = 0;
+
+        cues.forEach(function (cue, index) {
+            var text = cueTextToPlain(cue.text);
+            var entry = {
+                id: index,
+                index: index,
+                text: text
+            };
+            var length = text.length;
+
+            if (current.length && (current.length >= TRANSLATION_BATCH_SIZE || chars + length > TRANSLATION_BATCH_CHARS)) {
+                batches.push(current);
+                current = [];
+                chars = 0;
+            }
+
+            current.push(entry);
+            chars += length;
+        });
+
+        if (current.length) batches.push(current);
+
+        return batches;
+    }
+
+    function openRouterHeaders() {
+        return {
+            Authorization: 'Bearer ' + openRouterKey(),
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://m3dfatboi.github.io/lampa-opensubtitles-ru/',
+            'X-OpenRouter-Title': 'Lampa OpenSubtitles'
+        };
+    }
+
+    function parseJsonFromText(text) {
+        var content = (text || '').trim();
+        var start;
+        var end;
+
+        if (!content) throw new Error('empty response');
+
+        content = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+        try {
+            return JSON.parse(content);
+        }
+        catch (e) {
+            start = content.indexOf('{');
+            end = content.lastIndexOf('}');
+
+            if (start >= 0 && end > start) return JSON.parse(content.substring(start, end + 1));
+
+            throw e;
+        }
+    }
+
+    function openRouterContent(json) {
+        var message = json && json.choices && json.choices[0] && json.choices[0].message;
+        var content = message && message.content;
+
+        if (Array.isArray(content)) {
+            return content.map(function (part) {
+                return part && (part.text || part.content || '');
+            }).join('');
+        }
+
+        return content || '';
+    }
+
+    function normalizeTranslatedItems(parsed) {
+        var items = parsed && (parsed.items || parsed.translations || parsed.result || parsed);
+
+        if (!Array.isArray(items)) throw new Error('bad translation format');
+
+        return items;
+    }
+
+    function translateCueBatch(batch, sourceLang, targetLang, done, fail) {
+        var sourceName = promptLanguageName(sourceLang);
+        var targetName = promptLanguageName(targetLang);
+        var body = {
+            model: openRouterModel(),
+            temperature: 0.1,
+            messages: [
+                {
+                    role: 'system',
+                    content: 'You translate subtitle cues. Preserve meaning, tone, line breaks, punctuation, names, timing intent, and cue count. Return only valid JSON.'
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        source_language: sourceName,
+                        target_language: targetName,
+                        instructions: 'Translate each item.text. Keep the same numeric id. Do not merge, split, skip, add commentary, or wrap in Markdown. Output exactly {"items":[{"id":number,"text":"translated text"}]}.',
+                        items: batch.map(function (entry) {
+                            return {
+                                id: entry.id,
+                                text: entry.text
+                            };
+                        })
+                    })
+                }
+            ]
+        };
+
+        translationNetwork.timeout(90000);
+        translationNetwork.silent(OPENROUTER_URL, function (json) {
+            var parsed;
+
+            try {
+                parsed = normalizeTranslatedItems(parseJsonFromText(openRouterContent(json)));
+                done(parsed);
+            }
+            catch (e) {
+                fail({ message: 'не удалось разобрать ответ OpenRouter' });
+            }
+        }, function (xhr) {
+            fail(xhr);
+        }, JSON.stringify(body), {
+            dataType: 'json',
+            type: 'POST',
+            headers: openRouterHeaders()
+        });
+    }
+
+    function translateCues(cues, sourceLang, targetLang, progress, done, fail) {
+        var batches = buildTranslationBatches(cues);
+        var translated = cues.map(function (cue) {
+            return {
+                start: cue.start,
+                end: cue.end,
+                text: cue.text
+            };
+        });
+        var cursor = 0;
+
+        function next() {
+            var batch = batches[cursor];
+
+            if (!batch) {
+                done(translated);
+                return;
+            }
+
+            translateCueBatch(batch, sourceLang, targetLang, function (items) {
+                var byId = {};
+
+                items.forEach(function (item) {
+                    if (typeof item.id !== 'undefined') byId[item.id] = item.text;
+                });
+
+                batch.forEach(function (entry) {
+                    var text = byId[entry.id];
+
+                    if (typeof text === 'string' && text.trim()) {
+                        translated[entry.index].text = cleanSubtitleText(text);
+                    }
+                });
+
+                cursor++;
+
+                if (progress) progress(cursor, batches.length);
+
+                next();
+            }, fail);
+        }
+
+        next();
     }
 
     var renderer = {
@@ -1242,6 +1712,78 @@
                 dataType: 'text'
             });
         },
+        selectTranslated: function (item) {
+            var self = this;
+            var key = openRouterKey();
+            var targetLang = item.targetLang || selectedLanguage().code;
+
+            logDebug('renderer.selectTranslated', item && item.url, item && item.sourceLang, '→', targetLang);
+
+            if (!key) {
+                notify('Укажите OpenRouter API key в настройках OpenSubtitles');
+                return;
+            }
+
+            if (self.current === item && (self.loading || self.cues.length)) {
+                logDebug('renderer.selectTranslated skipped: already current');
+                return;
+            }
+
+            self.disable(false);
+            self.current = item;
+            self.loading = true;
+            self.lastText = null;
+            item.selected = true;
+
+            showSubtitleText('');
+            notify('Перевожу субтитры с ' + languageName(item.sourceLang) + '...');
+
+            subtitleNetwork.timeout(20000);
+            subtitleNetwork.silent(item.sourceUrl || item.url, function (text) {
+                var sourceCues;
+
+                if (self.current !== item) {
+                    logDebug('renderer.selectTranslated fetch ignored: current changed');
+                    return;
+                }
+
+                sourceCues = parseSubtitles(text || '');
+
+                logDebug('renderer.selectTranslated parsed', sourceCues.length, 'source cues from', (text || '').length, 'chars');
+
+                if (!sourceCues.length) {
+                    notify(PLUGIN_TITLE + ': файл субтитров пустой или не распознан');
+                    self.disable();
+                    return;
+                }
+
+                translateCues(sourceCues, item.sourceLang, targetLang, function (current, total) {
+                    if (self.current === item) notify('Перевод субтитров: ' + current + '/' + total);
+                }, function (translatedCues) {
+                    if (self.current !== item) return;
+
+                    self.cues = translatedCues;
+                    self.loading = false;
+
+                    notify('Автоперевод готов');
+                    self.start();
+                }, function (xhr) {
+                    if (self.current !== item) return;
+
+                    logDebug('renderer.selectTranslated error', xhr && (xhr.status || xhr.message));
+                    notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
+                    self.disable();
+                });
+            }, function (xhr) {
+                if (self.current !== item) return;
+
+                logDebug('renderer.selectTranslated fetch error', xhr && xhr.status);
+                notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
+                self.disable();
+            }, false, {
+                dataType: 'text'
+            });
+        },
         start: function () {
             var self = this;
 
@@ -1287,6 +1829,7 @@
 
             clearInterval(this.timer);
             subtitleNetwork.clear();
+            translationNetwork.clear();
 
             this.timer = 0;
             this.cues = [];
@@ -1413,6 +1956,7 @@
         lastPlayerData = data || {};
         lastKnownSubs = [];
         stremioSubs = [];
+        translatedSubs = [];
         searchState = 'idle';
         nativeSubsSeen = false;
         manualOverride = null;
@@ -1431,11 +1975,13 @@
         lastKnownSubs = [];
         lastPlayerData = null;
         stremioSubs = [];
+        translatedSubs = [];
         searchState = 'idle';
         nativeSubsSeen = false;
         manualOverride = null;
         renderer.destroy();
         network.clear();
+        translationNetwork.clear();
     }
 
     function injectOriginalTitle(body, movie) {
