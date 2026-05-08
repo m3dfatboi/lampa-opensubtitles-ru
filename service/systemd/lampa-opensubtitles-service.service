@@ -1,0 +1,22 @@
+[Unit]
+Description=Lampa OpenSubtitles Translate Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lampa-opensubtitles/service
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+User=lampa
+Group=lampa
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/lampa-opensubtitles/service/data
+
+[Install]
+WantedBy=multi-user.target

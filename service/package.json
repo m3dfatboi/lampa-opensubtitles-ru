@@ -1,0 +1,14 @@
+{
+  "name": "lampa-opensubtitles-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Backend, Telegram bot, credits and Robokassa integration for Lampa OpenSubtitles AI translation.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  }
+}
