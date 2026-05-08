@@ -79,6 +79,7 @@
     var translationPrefetched = {};
     var translationCheckResults = {};
     var translationCheckInflight = {};
+    var subtitleSourceCache = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
 
@@ -1551,7 +1552,7 @@
             index: index,
             language: item.lang || selectedLanguage().code,
             label: PLUGIN_TITLE,
-            title: PLUGIN_TITLE,
+            title: PLUGIN_TITLE + subtitleItemTitleSuffix(item),
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
@@ -2144,6 +2145,28 @@
         send(false);
     }
 
+    function subtitleItemTitleSuffix(item) {
+        if (!item || !item.url) return '';
+        return subtitleSourceCache[item.url] && subtitleSourceCache[item.url].length ? ' · ✓ в кеше' : '';
+    }
+
+    function translationCompletionText(result) {
+        var parts = ['Автоперевод готов'];
+        if (!result) return parts.join('');
+
+        if (typeof result.credits_spent !== 'undefined') {
+            var spent = Number(result.credits_spent) || 0;
+            if (spent > 0) parts.push('Списано ' + spent + ' кр.');
+            else parts.push('Из кеша, бесплатно');
+        }
+
+        if (typeof result.balance !== 'undefined' && result.balance !== null) {
+            parts.push('Баланс: ' + result.balance + ' кр.');
+        }
+
+        return parts.join(' · ');
+    }
+
     function translatedItemTitleSuffix(item) {
         if (!item || !item.translated) return '';
 
@@ -2640,11 +2663,21 @@
 
             self.disable(false);
             self.current = item;
-            self.loading = true;
             self.lastText = null;
             item.selected = true;
 
             showSubtitleText('');
+
+            var cached = item && item.url && subtitleSourceCache[item.url];
+            if (cached && cached.length) {
+                self.cues = cloneCues(cached);
+                self.loading = false;
+                logDebug('renderer.select: loaded from cache', self.cues.length, 'cues');
+                self.start();
+                return;
+            }
+
+            self.loading = true;
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.url, function (text) {
@@ -2663,6 +2696,8 @@
                     self.disable();
                     return;
                 }
+
+                if (item.url) subtitleSourceCache[item.url] = cloneCues(self.cues);
 
                 self.start();
             }, function (xhr) {
@@ -2730,7 +2765,7 @@
                         return;
                     }
 
-                    if (!fromCache) notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
+                    if (!fromCache) notify(translationCompletionText(result));
                     self.start();
                 });
                 translationPending[cacheKey].fail.push(function (xhr) {
@@ -2787,7 +2822,7 @@
                         return;
                     }
 
-                    if (!fromCache) notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
+                    if (!fromCache) notify(translationCompletionText(result));
                     self.start();
                 }, function (xhr) {
                     if (self.requestId !== requestId || self.current !== item) return;
