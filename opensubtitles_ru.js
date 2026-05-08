@@ -27,7 +27,7 @@
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
     var SERVICE_POLL_INTERVAL = 2500;
-    var SERVICE_POLL_TIMEOUT = 180000;
+    var SERVICE_POLL_TIMEOUT = 900000;
     var SERVICE_CREDIT_CHARS = 10000;
 
     var EXTRA_LANGUAGE_META = {
@@ -2542,7 +2542,7 @@
 
         function tick() {
             if (Date.now() - started > SERVICE_POLL_TIMEOUT) {
-                fail({ message: 'перевод занимает слишком много времени' });
+                fail({ message: 'перевод ещё идёт на сервере. Откройте «ИИ перевод» повторно через минуту — результат должен подхватиться из кеша.' });
                 return;
             }
 

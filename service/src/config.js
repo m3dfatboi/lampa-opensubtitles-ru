@@ -113,9 +113,9 @@ export function createConfig(rootDir = process.cwd()) {
       creditChars: intEnv('CREDIT_CHARS', 10000),
       maxSubtitleChars: intEnv('MAX_SUBTITLE_CHARS', 250000),
       maxActiveJobsPerUser: intEnv('MAX_ACTIVE_JOBS_PER_USER', 1),
-      chunkMaxCues: intEnv('TRANSLATION_CHUNK_MAX_CUES', 80),
-      chunkMaxChars: intEnv('TRANSLATION_CHUNK_MAX_CHARS', 8000),
-      chunkMaxTokens: intEnv('TRANSLATION_CHUNK_MAX_TOKENS', 12000),
+      chunkMaxCues: intEnv('TRANSLATION_CHUNK_MAX_CUES', 150),
+      chunkMaxChars: intEnv('TRANSLATION_CHUNK_MAX_CHARS', 14000),
+      chunkMaxTokens: intEnv('TRANSLATION_CHUNK_MAX_TOKENS', 20000),
       manualPaymentContact: (process.env.MANUAL_PAYMENT_CONTACT || '@m3dv3d3v').trim(),
       packages: packagesEnv()
     },
