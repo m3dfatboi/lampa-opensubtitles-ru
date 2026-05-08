@@ -103,6 +103,12 @@ export function createServer(service, bot, config) {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/v1/translations/check') {
+        const body = await readBody(req, 1024 * 1024 * 8);
+        jsonResponse(res, 200, service.checkTranslation(req.headers.authorization, body), CORS);
+        return;
+      }
+
       const translationParams = routeMatch(url.pathname, '/v1/translations/:id');
       if (req.method === 'GET' && translationParams) {
         jsonResponse(res, 200, service.getTranslation(req.headers.authorization, translationParams.id, queryParams(url)), CORS);

@@ -159,7 +159,7 @@ test('translation reserves credits once and then returns cached result', async (
     config,
     store,
     translator: {
-      cacheKey: () => 'cache:test',
+      cacheKey: ({ cues }) => `cache:${cues.map((cue) => cue.text).join('|')}`,
       translate: async ({ cues, onProgress }) => {
         onProgress('1/1');
         return cues.map((cue) => ({ ...cue, text: `RU ${cue.text}` }));
@@ -196,6 +196,18 @@ test('translation reserves credits once and then returns cached result', async (
   assert.equal(cached.status, 'completed');
   assert.equal(cached.credits_spent, 0);
   assert.equal(cached.balance, 2);
+
+  const checkBefore = service.checkTranslation(auth, body);
+  assert.equal(checkBefore.cached, true);
+  assert.equal(checkBefore.credits, 1);
+  assert.equal(checkBefore.source_chars, 5);
+
+  const checkMiss = service.checkTranslation(auth, {
+    ...body,
+    subtitle: { cues: [{ start: 0, end: 1000, text: 'Different line' }] }
+  });
+  assert.equal(checkMiss.cached, false);
+  assert.equal(checkMiss.credits, 1);
 }));
 
 test('anonymous device gets three free translations before linking', async () => withStore(async ({ config, store }) => {

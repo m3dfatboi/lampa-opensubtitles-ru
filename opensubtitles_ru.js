@@ -77,6 +77,8 @@
     var translationMemory = {};
     var translationPending = {};
     var translationPrefetched = {};
+    var translationCheckResults = {};
+    var translationCheckInflight = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
 
@@ -1873,11 +1875,13 @@
 
         nativeTranslated.forEach(function (item) {
             mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
+            checkServerTranslationCache(item);
         });
 
         externalTranslated.forEach(function (item) {
             mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
             prefetchTranslationSource(item);
+            checkServerTranslationCache(item);
         });
 
         if (!hasResults && !hasTranslated) {
@@ -2076,6 +2080,60 @@
         });
     }
 
+    function checkServerTranslationCache(item) {
+        if (!item || !item.translated) return;
+
+        var cues = item.sourceCues && item.sourceCues.length ? item.sourceCues : null;
+        if (!cues) return;
+
+        var targetLang = item.targetLang || selectedLanguage().code;
+        var key = translationCacheKey(item, targetLang);
+
+        if (translationCheckResults[key] || translationCheckInflight[key]) return;
+        if (translationMemory[key] && translationMemory[key].length) return;
+
+        translationCheckInflight[key] = true;
+
+        var body = {
+            device_id: deviceId(),
+            plugin_version: PLUGIN_VERSION,
+            source_language: item.sourceLang,
+            target_language: targetLang,
+            subtitle: {
+                text: item.sourceText || '',
+                cues: sourceCuePayload(cues),
+                cues_count: cues.length
+            }
+        };
+
+        function send(skipToken) {
+            serviceRequest('/v1/translations/check', body, function (result) {
+                delete translationCheckInflight[key];
+
+                translationCheckResults[key] = {
+                    cached: Boolean(result && result.cached),
+                    credits: Number(result && result.credits) || 0,
+                    chars: Number(result && result.source_chars) || 0
+                };
+
+                try { installToPanel(); }
+                catch (e) {}
+            }, function (xhr) {
+                if (!skipToken && xhr && xhr.status === 401) {
+                    clearDeviceToken();
+                    send(true);
+                    return;
+                }
+                delete translationCheckInflight[key];
+            }, {
+                timeout: 15000,
+                token: skipToken ? false : undefined
+            });
+        }
+
+        send(false);
+    }
+
     function translatedItemTitleSuffix(item) {
         if (!item || !item.translated) return '';
 
@@ -2083,6 +2141,11 @@
         var key = translationCacheKey(item, targetLang);
 
         if (translationMemory[key] && translationMemory[key].length) return ' · ✓ в кеше';
+
+        var serverCheck = translationCheckResults[key];
+        if (serverCheck && serverCheck.cached) return ' · ✓ в кеше';
+
+        if (serverCheck && serverCheck.credits) return ' · ≈' + serverCheck.credits + ' кр.';
 
         var chars = item.sourceChars;
         if (!chars) {

@@ -359,6 +359,29 @@ export class LampaTranslateService {
     };
   }
 
+  checkTranslation(authorization, input) {
+    this.authOrAnonymousDevice(authorization, input);
+    const targetLanguage = String(input.target_language || '').slice(0, 16) || 'rus';
+    const sourceLanguage = String(input.source_language || '').slice(0, 16) || 'eng';
+    const rawText = input.subtitle?.text || '';
+    const cues = normalizeCues(input.subtitle?.cues || []);
+    const chars = sourceCharacters(cues, rawText);
+
+    if (!cues.length) throw new HttpError(400, 'empty subtitles');
+
+    const cacheKey = this.translator.cacheKey({ cues, rawText, sourceLanguage, targetLanguage });
+    const cached = Boolean(this.store.getCachedTranslation(cacheKey));
+    const credits = Math.max(1, Math.ceil(chars / this.config.product.creditChars));
+
+    return {
+      cached,
+      credits,
+      source_chars: chars,
+      source_language: sourceLanguage,
+      target_language: targetLanguage
+    };
+  }
+
   getTranslation(authorization, jobId, input = {}) {
     const { user, anonymous } = this.authOrAnonymousDevice(authorization, input);
     const job = this.store.getTranslationJobForUser(jobId, user.id);
