@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v12-stable-anonymous-trial';
+    var PLUGIN_VERSION = 'v13-auto-select-translated';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -1545,7 +1545,7 @@
             configurable: true,
             set: function () {},
             get: function () {
-                return Boolean(renderer.current && renderer.current.url === sub.url);
+                return Boolean(renderer.current && renderer.current.url === sub.url && !renderer.current.translated);
             }
         });
 
@@ -1555,11 +1555,34 @@
                 if (value === 'showing') renderer.select(sub);
             },
             get: function () {
-                return renderer.current && renderer.current.url === sub.url ? 'showing' : 'disabled';
+                return renderer.current && renderer.current.url === sub.url && !renderer.current.translated ? 'showing' : 'disabled';
             }
         });
 
         return sub;
+    }
+
+    function isRendererPanelItem(item) {
+        if (!renderer.current || !item || !item.url) return false;
+
+        return item.url === renderer.current.url &&
+            Boolean(item.translated) === Boolean(renderer.current.translated);
+    }
+
+    function selectedPanelItem() {
+        var first = null;
+
+        for (var i = 0; i < latestPanelSubs.length; i++) {
+            try {
+                if (latestPanelSubs[i] && latestPanelSubs[i].selected === true) {
+                    if (isRendererPanelItem(latestPanelSubs[i])) return latestPanelSubs[i];
+                    if (!first) first = latestPanelSubs[i];
+                }
+            }
+            catch (e) {}
+        }
+
+        return first;
     }
 
     function createTranslatedSubtitleItem(item, index) {
@@ -1672,25 +1695,17 @@
         var original = Lampa.PlayerVideo.subsview;
 
         var wrapper = function (status) {
+            var picked;
             logDebug('Lampa.PlayerVideo.subsview status=' + status + ' actionPicked=' + actionWasPicked + ' rendererActive=' + (!!renderer.current));
 
             if (status === false && renderer.current && !actionWasPicked) {
-                var picked = null;
-                for (var i = 0; i < latestPanelSubs.length; i++) {
-                    try {
-                        if (latestPanelSubs[i] && latestPanelSubs[i].selected === true) {
-                            picked = latestPanelSubs[i];
-                            break;
-                        }
-                    }
-                    catch (e) {}
-                }
+                picked = selectedPanelItem();
 
-                if (picked && !picked.isDisabled && picked.url && picked.url === renderer.current.url) {
+                if (picked && !picked.isDisabled && isRendererPanelItem(picked)) {
                     logDebug('Lampa.PlayerVideo.subsview: overriding to true (our sub active)');
                     status = true;
                 }
-                else if (picked && !picked.isDisabled && picked.url && picked.url !== renderer.current.url) {
+                else if (picked && !picked.isDisabled && picked.url && !isRendererPanelItem(picked)) {
                     logDebug('Lampa.PlayerVideo.subsview: different sub picked, disabling our renderer');
                     renderer.disable();
                 }
@@ -1724,7 +1739,9 @@
         }
 
         var listenerFn = function (event) {
-            logDebug('subsview event fired status=' + (event && event.status) + ' actionPicked=' + actionWasPicked);
+            var status = event && event.status;
+
+            logDebug('subsview event fired status=' + status + ' actionPicked=' + actionWasPicked);
 
             if (actionWasPicked) return;
 
@@ -1734,22 +1751,18 @@
                     return;
                 }
 
-                var picked = null;
-                for (var i = 0; i < latestPanelSubs.length; i++) {
-                    try {
-                        if (latestPanelSubs[i] && latestPanelSubs[i].selected === true) {
-                            picked = latestPanelSubs[i];
-                            break;
-                        }
-                    }
-                    catch (e) {}
-                }
+                var picked = selectedPanelItem();
 
                 if (!picked || picked.isDisabled) {
-                    logDebug('subsview disable: nothing selected or disabled item picked');
-                    renderer.disable();
+                    if (status === false) {
+                        logDebug('subsview disable: nothing selected or disabled item picked');
+                        renderer.disable();
+                    }
+                    else {
+                        logDebug('subsview keep: no selected panel item while enabling');
+                    }
                 }
-                else if (picked.url && picked.url === renderer.current.url) {
+                else if (isRendererPanelItem(picked)) {
                     logDebug('subsview keep: our sub still picked');
                 }
                 else {
@@ -2605,6 +2618,9 @@
             var self = this;
 
             logDebug('renderer.start: timer fires every 200ms');
+
+            try { installToPanel(); }
+            catch (e) { logDebug('renderer.start install panel error', e && e.message); }
 
             if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
                 try { Lampa.PlayerVideo.subsview(true); } catch (e) {}
