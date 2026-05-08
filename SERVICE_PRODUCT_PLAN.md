@@ -1,12 +1,12 @@
 # Платный сервис автоперевода
 
-Этот документ фиксирует продуктовую схему для отдельного платного плагина `opensubtitles_ru_service.js`.
+Этот документ фиксирует продуктовую схему для единственного финального плагина `opensubtitles_ru.js`: старая ссылка остается основной, автоперевод работает через Telegram-бота, кредиты, Robokassa и backend.
 
-## Ссылки плагинов
+## Ссылка плагина
 
-- Платный сервисный вариант на старой ссылке: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
-- Платный сервисный вариант на отдельной новой ссылке: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_service.js`
-- Личный вариант с прямым OpenRouter ключом: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_personal.js`
+- Финальный сервисный вариант: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
+
+Отдельные plugin-файлы для personal/service больше не поддерживаются, чтобы не путаться в сборках.
 
 ## Модель
 
@@ -93,7 +93,7 @@ Request:
 ```json
 {
   "device_id": "lmp-...",
-  "plugin_version": "v1-service-credits",
+  "plugin_version": "v6-service-native-first-single-file",
   "platform": "android",
   "target_language": "rus"
 }
