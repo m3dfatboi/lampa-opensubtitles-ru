@@ -22,10 +22,10 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v9-service-hidden-endpoints';
+    var PLUGIN_VERSION = 'v10-service-production-endpoint';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
-    var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
-    var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
+    var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
+    var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
     var SERVICE_POLL_INTERVAL = 2500;
     var SERVICE_POLL_TIMEOUT = 180000;
 

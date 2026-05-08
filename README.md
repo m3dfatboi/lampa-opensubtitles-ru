@@ -62,7 +62,7 @@ English, Русский, Español, Français, Deutsch, Italiano, Português, Pol
 
 - `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
 
-Перед публичным запуском нужно заменить константы `SERVICE_API_BASE` и `TELEGRAM_BOT_URL` в `opensubtitles_ru.js` на реальные значения backend и бота. В интерфейсе Lampa эти поля не показываются пользователям.
+Сервисный backend уже задан внутри плагина: `https://lampa-subs.194.67.101.239.sslip.io`. Ссылка на бота: `https://t.me/LampaSubsBot`. В интерфейсе Lampa эти технические поля не показываются пользователям.
 
 ## Сервис автоперевода
 
