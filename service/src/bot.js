@@ -20,6 +20,20 @@ function isAdmin(config, telegramId) {
   return config.telegram.admins.includes(String(telegramId));
 }
 
+function createForcedLookup(ip) {
+  return (hostname, options, callback) => {
+    const done = typeof options === 'function' ? options : callback;
+    const lookupOptions = typeof options === 'function' ? {} : options;
+
+    if (lookupOptions?.all) {
+      done(null, [{ address: ip, family: 4 }]);
+      return;
+    }
+
+    done(null, ip, 4);
+  };
+}
+
 function postJson(options, payload) {
   const body = JSON.stringify(payload);
 
@@ -65,9 +79,7 @@ function postJson(options, payload) {
 async function directTelegramRequest(config, method, payload) {
   const host = config.telegram.apiHost || 'api.telegram.org';
   const forcedIp = config.telegram.apiIp;
-  const lookup = forcedIp
-    ? (hostname, lookupOptions, callback) => callback(null, forcedIp, 4)
-    : undefined;
+  const lookup = forcedIp ? createForcedLookup(forcedIp) : undefined;
 
   return postJson({
     timeoutMs: config.telegram.apiTimeoutMs,
