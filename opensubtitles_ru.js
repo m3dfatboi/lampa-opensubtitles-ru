@@ -780,7 +780,7 @@
 
             function finalize() {
                 stremioSubs = mapStremioResults(rawList);
-                translatedSubs = stremioSubs.length ? [] : mapTranslationCandidates(rawList, card);
+                translatedSubs = mapTranslationCandidates(rawList, card);
 
                 logDebug('merged', rawList.length, '→ filtered', stremioSubs.length, 'for', selectedLanguage().code, 'translate candidates', translatedSubs.length);
 
@@ -955,16 +955,24 @@
         return normalizeLangCode(raw);
     }
 
+    function effectiveSourceLanguage(original) {
+        var code = String(original || '').toLowerCase();
+        if (!code) return 'eng';
+        if (code === 'jpn') return 'eng';
+        return code;
+    }
+
     function translationSourceRank(code, original, target) {
-        var order = ['eng', 'jpn', 'fre', 'spa', 'ger', 'ita', 'por', 'kor', 'chi', 'pol', 'ukr', 'tur', 'dut', 'swe', 'nor', 'dan', 'fin'];
+        var order = ['fre', 'spa', 'ger', 'ita', 'por', 'kor', 'chi', 'pol', 'ukr', 'tur', 'dut', 'swe', 'nor', 'dan', 'fin', 'jpn'];
         var index;
 
         if (!code || code === target) return 999;
-        if (original && code === original) return 0;
-        if (code === 'eng') return original ? 1 : 0;
+
+        var effective = effectiveSourceLanguage(original);
+        if (code === effective) return 0;
+        if (code === 'eng') return 1;
 
         index = order.indexOf(code);
-
         return index >= 0 ? index + 2 : 100;
     }
 
@@ -1230,12 +1238,6 @@
         });
 
         return mapped.slice(0, 1);
-    }
-
-    function hasSubtitleLanguage(items, langCode) {
-        return (items || []).some(function (item) {
-            return item && !isOurSub(item) && itemLanguage(item) === langCode;
-        });
     }
 
     function isOurSub(item) {
@@ -1848,9 +1850,7 @@
 
         var hasResults = stremioSubs.length > 0;
 
-        if (!hasSubtitleLanguage(base, selectedLanguage().code)) {
-            nativeTranslated = nativeTranslationCandidates(base, activeCard(lastPlayerData));
-        }
+        nativeTranslated = nativeTranslationCandidates(base, activeCard(lastPlayerData));
 
         externalTranslated = translatedSubs;
 
