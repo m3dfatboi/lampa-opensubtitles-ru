@@ -57,6 +57,19 @@ English, Русский, Español, Français, Deutsch, Italiano, Português, Pol
 4. Откройте `Настройки -> OpenSubtitles` и выберите язык субтитров.
 5. Для автоперевода включите **Автоперевод через OpenRouter** и укажите **OpenRouter API key**.
 
+## Отдельные сборки
+
+- `opensubtitles_ru.js` — текущая основная сборка.
+- `opensubtitles_ru_personal.js` — сохраненная личная сборка с прямым OpenRouter ключом в настройках.
+- `opensubtitles_ru_service.js` — платная сервисная сборка: Telegram-привязка, QR-код и перевод через backend с кредитами.
+
+GitHub Pages ссылки:
+
+- `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_personal.js`
+- `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_service.js`
+
+Для сервисной сборки нужно заменить настройки **Сервер перевода** и **Telegram бот** на реальные значения вашего backend и бота.
+
 ## Внутренний плеер Lampa
 
 Для внутреннего плеера плагин дополняет штатную панель субтитров Lampa. При выборе варианта OpenSubtitles плагин скачивает файл, парсит SRT/VTT и выводит текст через стандартный слой субтитров Lampa.
