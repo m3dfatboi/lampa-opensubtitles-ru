@@ -515,6 +515,16 @@ export class Store {
     return this.db.prepare('SELECT * FROM translations WHERE id = ? AND user_id = ?').get(jobId, userId);
   }
 
+  listUserTranslations(userId, limit = 10) {
+    return this.db.prepare(`
+      SELECT id, source_language, target_language, source_chars, credits_spent, media_json, created_at, completed_at
+      FROM translations
+      WHERE user_id = ? AND status = 'completed'
+      ORDER BY COALESCE(completed_at, created_at) DESC
+      LIMIT ?
+    `).all(userId, Math.max(1, Math.min(50, Number(limit) || 10)));
+  }
+
   listRecoverableJobs() {
     return this.db.prepare(`
       SELECT id FROM translations

@@ -6,10 +6,124 @@ function mainKeyboard() {
     keyboard: [
       [{ text: 'Ввести код' }],
       [{ text: 'Баланс' }, { text: 'Купить кредиты' }],
+      [{ text: 'История переводов' }],
       [{ text: 'Мои устройства' }, { text: 'Помощь' }]
     ],
     resize_keyboard: true
   };
+}
+
+const LANGUAGE_NAMES_RU = {
+  eng: 'Английский',
+  rus: 'Русский',
+  spa: 'Испанский',
+  fre: 'Французский',
+  fra: 'Французский',
+  ger: 'Немецкий',
+  deu: 'Немецкий',
+  ita: 'Итальянский',
+  por: 'Португальский',
+  pol: 'Польский',
+  ukr: 'Украинский',
+  tur: 'Турецкий',
+  jpn: 'Японский',
+  chi: 'Китайский',
+  zho: 'Китайский',
+  kor: 'Корейский',
+  ara: 'Арабский',
+  hin: 'Хинди',
+  dut: 'Нидерландский',
+  nld: 'Нидерландский',
+  swe: 'Шведский',
+  nor: 'Норвежский',
+  dan: 'Датский',
+  fin: 'Финский',
+  rum: 'Румынский',
+  ron: 'Румынский',
+  cze: 'Чешский',
+  ces: 'Чешский',
+  hun: 'Венгерский',
+  gre: 'Греческий',
+  ell: 'Греческий',
+  heb: 'Иврит',
+  vie: 'Вьетнамский',
+  tha: 'Тайский',
+  ind: 'Индонезийский',
+  may: 'Малайский',
+  msa: 'Малайский'
+};
+
+const RU_MONTHS_GENITIVE = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+function languageNameRu(code) {
+  return LANGUAGE_NAMES_RU[String(code || '').toLowerCase()] || String(code || '?').toUpperCase();
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function safeParseMedia(raw) {
+  if (!raw) return {};
+  try { return JSON.parse(raw) || {}; }
+  catch (_) { return {}; }
+}
+
+function formatHistoryDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const day = date.getDate();
+  const month = RU_MONTHS_GENITIVE[date.getMonth()] || '';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${day} ${month}, ${hours}:${minutes}`;
+}
+
+function estimateCredits(chars, creditChars) {
+  if (!chars) return 0;
+  return Math.max(1, Math.ceil(Number(chars) / Math.max(1, Number(creditChars) || 10000)));
+}
+
+function formatHistoryCredits(row, creditChars) {
+  const spent = Number(row.credits_spent) || 0;
+  if (spent > 0) return `${spent} кр.`;
+
+  const estimate = estimateCredits(row.source_chars, creditChars);
+  if (!estimate) return 'безлимит';
+  return `${estimate} кр. (безлимит)`;
+}
+
+function formatHistoryEntry(row, index, creditChars) {
+  const media = safeParseMedia(row.media_json);
+  const title = String(media.title || '').trim() || 'Без названия';
+  const originalTitle = String(media.original_title || '').trim();
+
+  const meta = [];
+  if (Number(media.season) && Number(media.episode)) {
+    meta.push(`S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`);
+  }
+  if (media.year) meta.push(escapeHtml(String(media.year)));
+
+  const headTail = meta.length ? ` · ${meta.join(' · ')}` : '';
+  const originalTail = originalTitle && originalTitle !== title
+    ? ` <i>(${escapeHtml(originalTitle)})</i>`
+    : '';
+  const headLine = `${index}. <b>${escapeHtml(title)}</b>${headTail}${originalTail}`;
+
+  const langs = `${languageNameRu(row.source_language)} → ${languageNameRu(row.target_language)}`;
+  const credits = formatHistoryCredits(row, creditChars);
+  const date = formatHistoryDate(row.completed_at || row.created_at);
+
+  const second = [langs, credits, date].filter(Boolean).join(' · ');
+
+  return `${headLine}\n   ${second}`;
 }
 
 function startText() {
@@ -230,6 +344,7 @@ export class TelegramBot {
 
     if (/баланс/i.test(text)) return this.showBalance(chatId, user);
     if (/купить/i.test(text)) return this.showPackages(chatId, user);
+    if (/истори/i.test(text)) return this.showHistory(chatId, user);
     if (/устройств/i.test(text)) return this.showDevices(chatId, user);
     if (/помощ/i.test(text)) return this.showHelp(chatId);
 
@@ -244,6 +359,7 @@ export class TelegramBot {
     if (command === '/code' || command === '/connect' || command === '/link') {
       return this.sendMessage(chatId, codePromptText(), { reply_markup: mainKeyboard() });
     }
+    if (command === '/history') return this.showHistory(chatId, telegramUser);
     if (command === '/balance' && !arg1) return this.showBalance(chatId, telegramUser);
 
     if (!isAdmin(this.config, telegramUser.id)) {
@@ -312,6 +428,7 @@ export class TelegramBot {
     if (data === 'balance') return this.showBalance(chatId, user);
     if (data === 'buy') return this.showPackages(chatId, user);
     if (data === 'devices') return this.showDevices(chatId, user);
+    if (data === 'history') return this.showHistory(chatId, user);
     if (data === 'help') return this.showHelp(chatId);
 
     if (data.startsWith('buy:')) {
@@ -364,9 +481,32 @@ export class TelegramBot {
       reply_markup: {
         inline_keyboard: [
           [{ text: 'Купить кредиты', callback_data: 'buy' }],
+          [{ text: 'История переводов', callback_data: 'history' }],
           [{ text: 'Мои устройства', callback_data: 'devices' }]
         ]
       }
+    });
+  }
+
+  async showHistory(chatId, telegramUser) {
+    const user = this.store.ensureUser(telegramUser);
+    const rows = this.store.listUserTranslations(user.id, 10);
+
+    if (!rows.length) {
+      return this.sendMessage(chatId, 'История переводов пуста. Запустите ИИ-перевод субтитров в Lampa, и переводы появятся здесь.', {
+        reply_markup: mainKeyboard()
+      });
+    }
+
+    const creditChars = this.config.product.creditChars;
+    const totalCredits = rows.reduce((sum, row) => sum + (Number(row.credits_spent) || 0), 0);
+    const lines = rows.map((row, index) => formatHistoryEntry(row, index + 1, creditChars));
+
+    const header = `Последние переводы: ${rows.length}` +
+      (totalCredits > 0 ? ` · Списано кредитов: ${totalCredits}` : '');
+
+    return this.sendMessage(chatId, [header, '', lines.join('\n\n')].join('\n'), {
+      reply_markup: mainKeyboard()
     });
   }
 
