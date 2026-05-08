@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_ID = 'opensubtitles_ru';
-    var PLUGIN_TITLE = 'OpenSubtitles Translate';
+    var PLUGIN_TITLE = 'OpenSubtitles';
     var DEFAULT_LANG = 'rus';
 
     var ADDONS = [
@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v7-service-subtitle-priority-order';
+    var PLUGIN_VERSION = 'v8-service-opensubtitles-title';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
     var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';

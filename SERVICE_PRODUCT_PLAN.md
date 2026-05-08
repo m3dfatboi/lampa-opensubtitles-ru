@@ -93,7 +93,7 @@ Request:
 ```json
 {
   "device_id": "lmp-...",
-  "plugin_version": "v7-service-subtitle-priority-order",
+  "plugin_version": "v8-service-opensubtitles-title",
   "platform": "android",
   "target_language": "rus"
 }

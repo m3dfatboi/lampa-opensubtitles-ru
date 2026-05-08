@@ -293,7 +293,7 @@ export class TelegramBot {
   async showHelp(chatId) {
     return this.sendMessage(chatId, [
       'Как подключить:',
-      '1. Откройте Lampa -> настройки OpenSubtitles Translate.',
+      '1. Откройте Lampa -> настройки OpenSubtitles.',
       '2. Выберите AI-субтитры в плеере.',
       '3. Если плагин попросит Telegram, отсканируйте QR-код или откройте ссылку.',
       '',
