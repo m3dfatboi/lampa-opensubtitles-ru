@@ -33,6 +33,7 @@ function createBot(overrides = {}) {
   }, {
     ensureUser: (user) => ({ id: user.id, ...user }),
     listUserTranslations: () => [],
+    listUserDevices: () => [],
     stats: () => ({
       users: 0,
       paid: { count: 0, amount: 0 },
@@ -106,6 +107,31 @@ test('bot reports empty history when user has no translations', async () => {
   });
 
   assert.match(sent[0].text, /История переводов пуста/);
+});
+
+test('devices list shows relative last-seen time, not raw ISO', async () => {
+  const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const yesterday = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+
+  const { bot, sent } = createBot({
+    store: {
+      listUserDevices: () => [
+        { id: 'd1', platform: 'android', target_language: 'rus', last_seen_at: recent, revoked_at: null },
+        { id: 'd2', platform: 'tv', target_language: 'eng', last_seen_at: yesterday, revoked_at: null }
+      ]
+    }
+  });
+
+  await bot.handleMessage({
+    text: 'Мои устройства',
+    from: { id: 42, username: 'viewer' },
+    chat: { id: 100 }
+  });
+
+  const text = sent[0].text;
+  assert.match(text, /5 минут назад/);
+  assert.match(text, /вчера в \d{2}:\d{2}/);
+  assert.doesNotMatch(text, /T\d{2}:\d{2}/);
 });
 
 test('admin /stats includes a clickable list of linked users', async () => {
@@ -197,7 +223,7 @@ test('bot formats history with title, langs, credits and date', async () => {
   });
 
   await bot.handleMessage({
-    text: 'История переводов',
+    text: 'История',
     from: { id: 42, username: 'viewer' },
     chat: { id: 100 }
   });

@@ -6,7 +6,7 @@ function mainKeyboard() {
     keyboard: [
       [{ text: 'Ввести код' }],
       [{ text: 'Баланс' }, { text: 'Купить кредиты' }],
-      [{ text: 'История переводов' }],
+      [{ text: 'История' }],
       [{ text: 'Мои устройства' }, { text: 'Помощь' }]
     ],
     resize_keyboard: true
@@ -84,6 +84,37 @@ function formatHistoryDate(value) {
   const minutes = String(date.getMinutes()).padStart(2, '0');
 
   return `${day} ${month}, ${hours}:${minutes}`;
+}
+
+function pluralRu(n, [one, few, many]) {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return many;
+  if (last > 1 && last < 5) return few;
+  if (last === 1) return one;
+  return many;
+}
+
+function formatRelativeTime(value, now = new Date()) {
+  if (!value) return 'неизвестно';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'неизвестно';
+
+  const diffSec = Math.round((now.getTime() - date.getTime()) / 1000);
+  if (diffSec < 0) return 'только что';
+  if (diffSec < 45) return 'только что';
+
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} ${pluralRu(diffMin, ['минуту', 'минуты', 'минут'])} назад`;
+
+  const diffHour = Math.round(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} ${pluralRu(diffHour, ['час', 'часа', 'часов'])} назад`;
+
+  const diffDay = Math.round(diffHour / 24);
+  if (diffDay === 1) return `вчера в ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (diffDay < 7) return `${diffDay} ${pluralRu(diffDay, ['день', 'дня', 'дней'])} назад`;
+
+  return formatHistoryDate(value);
 }
 
 function estimateCredits(chars, creditChars) {
@@ -520,7 +551,7 @@ export class TelegramBot {
       reply_markup: {
         inline_keyboard: [
           [{ text: 'Купить кредиты', callback_data: 'buy' }],
-          [{ text: 'История переводов', callback_data: 'history' }],
+          [{ text: 'История', callback_data: 'history' }],
           [{ text: 'Мои устройства', callback_data: 'devices' }]
         ]
       }
@@ -569,7 +600,7 @@ export class TelegramBot {
 
     const lines = devices.map((device, index) => {
       const name = device.platform || 'unknown';
-      return `${index + 1}. ${name}, ${device.target_language || 'lang'}, последняя активность: ${device.last_seen_at}`;
+      return `${index + 1}. ${name}, ${device.target_language || 'lang'}, активность: ${formatRelativeTime(device.last_seen_at)}`;
     });
     const keyboard = devices.map((device, index) => ([{
       text: `Отвязать #${index + 1}`,
