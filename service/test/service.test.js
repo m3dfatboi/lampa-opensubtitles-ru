@@ -225,6 +225,7 @@ test('anonymous device gets three free translations before linking', async () =>
 
     assert.equal(queued.status, 'queued');
     assert.equal(queued.anonymous, true);
+    assert.equal(queued.free_trial_activated, true);
     assert.equal(queued.free_trial.used, index);
     assert.equal(queued.free_trial.limit, 3);
 
@@ -235,16 +236,42 @@ test('anonymous device gets three free translations before linking', async () =>
 
   assert.equal(translateCount, 3);
 
-  assert.throws(() => service.startTranslation('', {
+  const cached = service.startTranslation('', {
     device_id: 'anon-device',
     plugin_version: 'test',
     platform: 'browser',
     source_language: 'eng',
     target_language: 'rus',
     subtitle: {
-      cues: [{ start: 0, end: 1000, text: 'Hello 4' }]
+      cues: [{ start: 0, end: 1000, text: 'Hello 1' }]
     }
-  }), /бесплатные ИИ-переводы закончились/);
+  });
+  assert.equal(cached.status, 'completed');
+  assert.equal(cached.free_trial_activated, undefined);
+  assert.equal(cached.free_trial.used, 3);
+  assert.equal(translateCount, 3);
+
+  let limitError = null;
+  try {
+    service.startTranslation('', {
+      device_id: 'anon-device',
+      plugin_version: 'test',
+      platform: 'browser',
+      source_language: 'eng',
+      target_language: 'rus',
+      subtitle: {
+        cues: [{ start: 0, end: 1000, text: 'Hello 4' }]
+      }
+    });
+  }
+  catch (error) {
+    limitError = error;
+  }
+
+  assert.match(limitError?.message || '', /бесплатные ИИ-переводы закончились/);
+  assert.equal(limitError.status, 402);
+  assert.equal(limitError.details.requires_link, true);
+  assert.deepEqual(limitError.details.free_trial, { used: 3, limit: 3, remaining: 0 });
 
   const account = service.getAccount('', { device_id: 'anon-device' });
   assert.equal(account.linked, false);

@@ -146,8 +146,10 @@ export function createServer(service, bot, config) {
     catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof SyntaxError ? 'bad json' : (error.message || 'server error');
+      const payload = { message };
+      if (error instanceof HttpError && error.details) Object.assign(payload, error.details);
       if (status >= 500) console.error('[server]', error);
-      jsonResponse(res, status, { message }, CORS);
+      jsonResponse(res, status, payload, CORS);
     }
   });
 

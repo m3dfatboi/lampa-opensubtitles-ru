@@ -325,7 +325,10 @@ export class LampaTranslateService {
       }
       catch (error) {
         if (error.message === 'ANONYMOUS_LIMIT_REACHED') {
-          throw new HttpError(402, 'бесплатные ИИ-переводы закончились. Подключите Telegram и пополните баланс.');
+          throw new HttpError(402, 'бесплатные ИИ-переводы закончились. Подключите Telegram и пополните баланс.', {
+            requires_link: true,
+            free_trial: freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations)
+          });
         }
         throw error;
       }
@@ -349,6 +352,7 @@ export class LampaTranslateService {
       reserved_credits: user.unlimited ? 0 : credits,
       balance: freshUser.balance,
       anonymous,
+      free_trial_activated: Boolean(freeTrial),
       free_trial: freeTrial || (anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined)
     };
   }

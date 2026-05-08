@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v11-ai-subtitles-ux';
+    var PLUGIN_VERSION = 'v12-stable-anonymous-trial';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -102,6 +102,59 @@
 
     function storage(name, fallback) {
         return Lampa.Storage.get(name, fallback);
+    }
+
+    function localStorageGet(name) {
+        try {
+            if (!window.localStorage) return '';
+            return window.localStorage.getItem(name) || '';
+        }
+        catch (e) {
+            return '';
+        }
+    }
+
+    function localStorageSet(name, value) {
+        try {
+            if (window.localStorage) window.localStorage.setItem(name, String(value || ''));
+        }
+        catch (e) {}
+    }
+
+    function localStorageRemove(name) {
+        try {
+            if (window.localStorage) window.localStorage.removeItem(name);
+        }
+        catch (e) {}
+    }
+
+    function persistentStorage(name, fallback) {
+        var local = localStorageGet(name);
+        var value;
+
+        if (local !== '') {
+            try { Lampa.Storage.set(name, local); } catch (e) {}
+            return local;
+        }
+
+        value = storage(name, '');
+
+        if (value !== '' && value !== null && typeof value !== 'undefined') {
+            localStorageSet(name, value);
+            return value;
+        }
+
+        return fallback;
+    }
+
+    function setPersistentStorage(name, value) {
+        try { Lampa.Storage.set(name, String(value || '')); } catch (e) {}
+        localStorageSet(name, value);
+    }
+
+    function clearPersistentStorage(name) {
+        try { Lampa.Storage.set(name, ''); } catch (e) {}
+        localStorageRemove(name);
     }
 
     function storageBool(name, fallback) {
@@ -363,23 +416,23 @@
     }
 
     function deviceToken() {
-        return (storage(PLUGIN_ID + '_device_token', '') || '').trim();
+        return (persistentStorage(PLUGIN_ID + '_device_token', '') || '').trim();
     }
 
     function saveDeviceToken(token) {
-        if (token) Lampa.Storage.set(PLUGIN_ID + '_device_token', token);
+        if (token) setPersistentStorage(PLUGIN_ID + '_device_token', token);
     }
 
     function clearDeviceToken() {
-        Lampa.Storage.set(PLUGIN_ID + '_device_token', '');
+        clearPersistentStorage(PLUGIN_ID + '_device_token');
     }
 
     function accountStatusText() {
-        var linked = storageBool(PLUGIN_ID + '_account_linked', false);
-        var unlimited = storageBool(PLUGIN_ID + '_account_unlimited', false);
-        var balance = storage(PLUGIN_ID + '_account_balance', '');
-        var freeUsed = parseInt(storage(PLUGIN_ID + '_free_used', '0'), 10) || 0;
-        var freeLimit = parseInt(storage(PLUGIN_ID + '_free_limit', '3'), 10) || 3;
+        var linked = persistentStorage(PLUGIN_ID + '_account_linked', 'false') === 'true';
+        var unlimited = persistentStorage(PLUGIN_ID + '_account_unlimited', 'false') === 'true';
+        var balance = persistentStorage(PLUGIN_ID + '_account_balance', '');
+        var freeUsed = parseInt(persistentStorage(PLUGIN_ID + '_free_used', '0'), 10) || 0;
+        var freeLimit = parseInt(persistentStorage(PLUGIN_ID + '_free_limit', '3'), 10) || 3;
         var freeLeft = Math.max(0, freeLimit - freeUsed);
 
         if (linked && unlimited) return 'Баланс: безлимит';
@@ -391,16 +444,16 @@
     function saveAccountState(account) {
         if (!account) return;
 
-        Lampa.Storage.set(PLUGIN_ID + '_account_linked', account.linked ? 'true' : 'false');
+        setPersistentStorage(PLUGIN_ID + '_account_linked', account.linked ? 'true' : 'false');
 
         if (account.linked) {
-            Lampa.Storage.set(PLUGIN_ID + '_account_unlimited', account.unlimited ? 'true' : 'false');
-            if (typeof account.balance !== 'undefined') Lampa.Storage.set(PLUGIN_ID + '_account_balance', String(account.balance));
+            setPersistentStorage(PLUGIN_ID + '_account_unlimited', account.unlimited ? 'true' : 'false');
+            if (typeof account.balance !== 'undefined') setPersistentStorage(PLUGIN_ID + '_account_balance', String(account.balance));
         }
 
         if (account.free_trial) {
-            Lampa.Storage.set(PLUGIN_ID + '_free_used', String(account.free_trial.used || 0));
-            Lampa.Storage.set(PLUGIN_ID + '_free_limit', String(account.free_trial.limit || 3));
+            setPersistentStorage(PLUGIN_ID + '_free_used', String(account.free_trial.used || 0));
+            setPersistentStorage(PLUGIN_ID + '_free_limit', String(account.free_trial.limit || 3));
         }
     }
 
@@ -424,7 +477,7 @@
         }, function (xhr) {
             if (xhr && xhr.status === 401) {
                 clearDeviceToken();
-                Lampa.Storage.set(PLUGIN_ID + '_account_linked', 'false');
+                setPersistentStorage(PLUGIN_ID + '_account_linked', 'false');
             }
             if (fail) fail(xhr);
         }, {
@@ -433,13 +486,14 @@
     }
 
     function deviceId() {
-        var id = storage(PLUGIN_ID + '_device_id', '');
+        var key = PLUGIN_ID + '_device_id';
+        var id = persistentStorage(key, '');
 
         if (!id) {
             id = 'lmp-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
-            Lampa.Storage.set(PLUGIN_ID + '_device_id', id);
         }
 
+        setPersistentStorage(key, id);
         return id;
     }
 
@@ -1935,6 +1989,20 @@
         return match ? '@' + match[1] : 'Telegram-бот';
     }
 
+    function pausePlayback() {
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+
+        try {
+            if (video && typeof video.pause === 'function' && !video.paused) video.pause();
+        }
+        catch (e) {}
+
+        try {
+            if (Lampa.Player && typeof Lampa.Player.pause === 'function') Lampa.Player.pause();
+        }
+        catch (e2) {}
+    }
+
     function showServiceConnectModal(onLinked) {
         var base = serviceBaseUrl();
         var prevController = captureController();
@@ -1944,6 +2012,7 @@
             return;
         }
 
+        pausePlayback();
         notify('Создаю код подключения...');
 
         serviceRequest('/v1/devices/session', {
@@ -2108,7 +2177,7 @@
     }
 
     function announceFreeTranslation(result) {
-        if (!result || !result.anonymous || !result.free_trial || !result.free_trial.used) return;
+        if (!result || !result.anonymous || !result.free_trial_activated || !result.free_trial || !result.free_trial.used) return;
 
         notify(result.free_trial.used + ' из ' + result.free_trial.limit + ' бесплатных переводов активировано');
     }
@@ -2127,6 +2196,7 @@
 
         if (xhr && xhr.status === 401) clearDeviceToken();
 
+        pausePlayback();
         showServiceConnectModal(retry);
         return true;
     }
@@ -2450,7 +2520,7 @@
                     if (handleServiceAccessError(xhr, function () {
                         renderer.selectTranslated(item);
                     })) {
-                        self.loading = false;
+                        self.disable();
                         return;
                     }
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
@@ -2506,7 +2576,7 @@
                     if (handleServiceAccessError(xhr, function () {
                         renderer.selectTranslated(item);
                     })) {
-                        self.loading = false;
+                        self.disable();
                         return;
                     }
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
