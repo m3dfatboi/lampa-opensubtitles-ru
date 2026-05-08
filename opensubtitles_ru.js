@@ -22,14 +22,12 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v3-service-old-url-cache';
+    var PLUGIN_VERSION = 'v4-service-old-url-session-cache';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
     var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
     var SERVICE_POLL_INTERVAL = 2500;
     var SERVICE_POLL_TIMEOUT = 180000;
-    var TRANSLATION_CACHE_LIMIT = 5;
-    var TRANSLATION_CACHE_MAX_BYTES = 1200000;
 
     var EXTRA_LANGUAGE_META = {
         jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
@@ -1621,22 +1619,6 @@
         ].join('|');
     }
 
-    function simpleHash(text) {
-        var hash = 5381;
-        var value = text || '';
-
-        for (var i = 0; i < value.length; i++) {
-            hash = ((hash << 5) + hash) + value.charCodeAt(i);
-            hash = hash & hash;
-        }
-
-        return (hash >>> 0).toString(36);
-    }
-
-    function cacheStorageKey(key) {
-        return PLUGIN_ID + '_translation_cache_' + simpleHash(key);
-    }
-
     function cloneCues(cues) {
         return (cues || []).map(function (cue) {
             return {
@@ -1648,66 +1630,12 @@
     }
 
     function cachedTranslation(key) {
-        var stored;
-
         if (translationMemory[key] && translationMemory[key].length) return cloneCues(translationMemory[key]);
-
-        stored = storage(cacheStorageKey(key), null);
-
-        if (stored && stored.key === key && stored.cues && stored.cues.length) {
-            translationMemory[key] = cloneCues(stored.cues);
-            return cloneCues(stored.cues);
-        }
-
         return null;
     }
 
-    function removeStoredTranslation(id) {
-        var key = PLUGIN_ID + '_translation_cache_' + id;
-
-        try {
-            if (Lampa.Storage && Lampa.Storage.remove) Lampa.Storage.remove(key);
-            else if (window.localStorage) window.localStorage.removeItem(key);
-        }
-        catch (e) {}
-    }
-
     function rememberTranslation(key, cues) {
-        var id = simpleHash(key);
-        var storageKey = cacheStorageKey(key);
-        var index = storage(PLUGIN_ID + '_translation_cache_index', []);
-        var entry = {
-            key: key,
-            cues: cloneCues(cues),
-            created: Date.now(),
-            version: PLUGIN_VERSION
-        };
-        var serialized;
-
         translationMemory[key] = cloneCues(cues);
-
-        try { serialized = JSON.stringify(entry); }
-        catch (e) { return; }
-
-        if (!serialized || serialized.length > TRANSLATION_CACHE_MAX_BYTES) return;
-
-        index = Array.isArray(index) ? index.filter(function (item) {
-            return item && item.id !== id;
-        }) : [];
-
-        index.push({ id: id, created: entry.created });
-
-        while (index.length > TRANSLATION_CACHE_LIMIT) {
-            removeStoredTranslation(index.shift().id);
-        }
-
-        try {
-            Lampa.Storage.set(storageKey, entry);
-            Lampa.Storage.set(PLUGIN_ID + '_translation_cache_index', index);
-        }
-        catch (e2) {
-            logDebug('translation cache write failed', e2 && e2.message);
-        }
     }
 
     function serviceBotLink(code) {

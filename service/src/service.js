@@ -78,7 +78,11 @@ export class TranslationQueue {
         cues: sourceCues,
         sourceLanguage: job.source_language,
         targetLanguage: job.target_language,
-        onProgress: (progress) => this.store.updateJobStatus(job.id, 'processing', progress)
+        onProgress: (progress) => this.store.updateJobStatus(job.id, 'processing', progress),
+        chunkCache: {
+          get: (chunkKey) => this.store.getCachedTranslationChunk(job.cache_key, chunkKey),
+          set: (chunkKey, items) => this.store.saveCachedTranslationChunk(job.cache_key, chunkKey, items)
+        }
       });
 
       this.store.completeJob(job, translated);

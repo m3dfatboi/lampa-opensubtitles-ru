@@ -244,6 +244,86 @@ test('translator accepts local chunk ids returned by model', async () => {
   }
 });
 
+test('translator reuses cached chunks after a failed partial translation', async () => {
+  const config = testConfig(fs.mkdtempSync(path.join(os.tmpdir(), 'lampa-translator-partial-cache-test-')));
+  config.product.chunkMaxCues = 2;
+  config.product.chunkMaxChars = 1000;
+  const originalFetch = globalThis.fetch;
+  const chunkCache = new Map();
+  const seenChunks = [];
+  let failSecondChunk = true;
+
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const payload = JSON.parse(body.messages[1].content);
+    seenChunks.push(payload.items.map((item) => item.id));
+
+    if (failSecondChunk && payload.items.length === 1) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              finish_reason: 'length',
+              message: {
+                content: ''
+              }
+            }
+          ]
+        })
+      };
+    }
+
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: {
+              content: JSON.stringify({
+                items: payload.items.map((item, index) => ({ id: index, text: `RU ${item.text}` }))
+              })
+            }
+          }
+        ]
+      })
+    };
+  };
+
+  try {
+    const translator = new Translator(config);
+    const args = {
+      sourceLanguage: 'eng',
+      targetLanguage: 'rus',
+      cues: [
+        { start: 0, end: 1000, text: 'one' },
+        { start: 1000, end: 2000, text: 'two' },
+        { start: 2000, end: 3000, text: 'three' }
+      ],
+      chunkCache: {
+        get: (key) => chunkCache.get(key) || null,
+        set: (key, items) => chunkCache.set(key, items)
+      }
+    };
+
+    await assert.rejects(translator.translate(args), /OpenRouter обрезал ответ/);
+    assert.deepEqual(seenChunks, [[0, 1], [2]]);
+    assert.equal(chunkCache.has('0,1'), true);
+
+    seenChunks.length = 0;
+    failSecondChunk = false;
+
+    const translated = await translator.translate(args);
+    assert.deepEqual(seenChunks, [[2]]);
+    assert.deepEqual(translated.map((cue) => cue.text), ['RU one', 'RU two', 'RU three']);
+  }
+  finally {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(config.rootDir, { recursive: true, force: true });
+  }
+});
+
 test('translator splits a chunk when model returns incomplete JSON items', async () => {
   const config = testConfig(fs.mkdtempSync(path.join(os.tmpdir(), 'lampa-translator-split-test-')));
   config.product.chunkMaxCues = 4;

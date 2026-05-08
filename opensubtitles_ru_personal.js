@@ -22,12 +22,10 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v17-personal-split-retry';
+    var PLUGIN_VERSION = 'v18-personal-session-chunk-cache';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
     var DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash';
-    var TRANSLATION_CACHE_LIMIT = 5;
-    var TRANSLATION_CACHE_MAX_BYTES = 1200000;
     var TRANSLATION_CHUNK_MAX_CUES = 80;
     var TRANSLATION_CHUNK_MAX_CHARS = 8000;
     var TRANSLATION_CHUNK_MAX_TOKENS = 12000;
@@ -77,6 +75,7 @@
     var actionWasPicked = false;
     var latestPanelSubs = [];
     var translationMemory = {};
+    var translationChunkMemory = {};
     var translationPending = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
@@ -1563,22 +1562,6 @@
         ].join('|');
     }
 
-    function simpleHash(text) {
-        var hash = 5381;
-        var value = text || '';
-
-        for (var i = 0; i < value.length; i++) {
-            hash = ((hash << 5) + hash) + value.charCodeAt(i);
-            hash = hash & hash;
-        }
-
-        return (hash >>> 0).toString(36);
-    }
-
-    function cacheStorageKey(key) {
-        return PLUGIN_ID + '_translation_cache_' + simpleHash(key);
-    }
-
     function cloneCues(cues) {
         return (cues || []).map(function (cue) {
             return {
@@ -1590,66 +1573,12 @@
     }
 
     function cachedTranslation(key) {
-        var stored;
-
         if (translationMemory[key] && translationMemory[key].length) return cloneCues(translationMemory[key]);
-
-        stored = storage(cacheStorageKey(key), null);
-
-        if (stored && stored.key === key && stored.cues && stored.cues.length) {
-            translationMemory[key] = cloneCues(stored.cues);
-            return cloneCues(stored.cues);
-        }
-
         return null;
     }
 
-    function removeStoredTranslation(id) {
-        var key = PLUGIN_ID + '_translation_cache_' + id;
-
-        try {
-            if (Lampa.Storage && Lampa.Storage.remove) Lampa.Storage.remove(key);
-            else if (window.localStorage) window.localStorage.removeItem(key);
-        }
-        catch (e) {}
-    }
-
     function rememberTranslation(key, cues) {
-        var id = simpleHash(key);
-        var storageKey = cacheStorageKey(key);
-        var index = storage(PLUGIN_ID + '_translation_cache_index', []);
-        var entry = {
-            key: key,
-            cues: cloneCues(cues),
-            created: Date.now(),
-            version: PLUGIN_VERSION
-        };
-        var serialized;
-
         translationMemory[key] = cloneCues(cues);
-
-        try { serialized = JSON.stringify(entry); }
-        catch (e) { return; }
-
-        if (!serialized || serialized.length > TRANSLATION_CACHE_MAX_BYTES) return;
-
-        index = Array.isArray(index) ? index.filter(function (item) {
-            return item && item.id !== id;
-        }) : [];
-
-        index.push({ id: id, created: entry.created });
-
-        while (index.length > TRANSLATION_CACHE_LIMIT) {
-            removeStoredTranslation(index.shift().id);
-        }
-
-        try {
-            Lampa.Storage.set(storageKey, entry);
-            Lampa.Storage.set(PLUGIN_ID + '_translation_cache_index', index);
-        }
-        catch (e2) {
-            logDebug('translation cache write failed', e2 && e2.message);
-        }
     }
 
     function openRouterHeaders() {
@@ -1731,6 +1660,47 @@
         if (typeof item.n !== 'undefined') return item.n;
 
         return fallback;
+    }
+
+    function cloneTranslatedItems(items) {
+        return (items || []).map(function (item, index) {
+            return {
+                id: translatedIdFromItem(item, index),
+                text: translatedTextFromItem(item)
+            };
+        });
+    }
+
+    function translationChunkKey(chunk) {
+        return (chunk || []).map(function (item) {
+            return String(item && item.id);
+        }).join(',');
+    }
+
+    function cachedTranslationChunk(cacheKey, chunk) {
+        var group = translationChunkMemory[cacheKey];
+        var items = group && group[translationChunkKey(chunk)];
+
+        if (!items || !items.length) return null;
+
+        items = normalizeChunkItems(chunk, items);
+
+        if (translatedCountForChunk(chunk, items) >= chunk.length) {
+            return cloneTranslatedItems(items);
+        }
+
+        return null;
+    }
+
+    function rememberTranslationChunk(cacheKey, chunk, items) {
+        if (!cacheKey || !chunk || !chunk.length) return;
+
+        items = normalizeChunkItems(chunk, items);
+
+        if (translatedCountForChunk(chunk, items) < chunk.length) return;
+
+        if (!translationChunkMemory[cacheKey]) translationChunkMemory[cacheKey] = {};
+        translationChunkMemory[cacheKey][translationChunkKey(chunk)] = cloneTranslatedItems(items);
     }
 
     function translationMaxTokens(items) {
@@ -1928,11 +1898,19 @@
         });
     }
 
-    function translateCueChunkResilient(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
+    function translateCueChunkResilient(cacheKey, chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
+        var cached = cachedTranslationChunk(cacheKey, chunk);
+
+        if (cached) {
+            done(cached);
+            return;
+        }
+
         translateCueChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, function (items) {
             items = normalizeChunkItems(chunk, items);
 
-            if (translatedCountForChunk(chunk, items) >= Math.max(1, Math.floor(chunk.length * 0.95))) {
+            if (translatedCountForChunk(chunk, items) >= chunk.length) {
+                rememberTranslationChunk(cacheKey, chunk, items);
                 done(items);
                 return;
             }
@@ -1942,10 +1920,10 @@
                 return;
             }
 
-            translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
+            translateSplitChunk(cacheKey, chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
         }, function (xhr) {
             if (chunk.length > 1 && isSplittableTranslationError(xhr)) {
-                translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
+                translateSplitChunk(cacheKey, chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail);
                 return;
             }
 
@@ -1953,7 +1931,7 @@
         });
     }
 
-    function translateSplitChunk(chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
+    function translateSplitChunk(cacheKey, chunk, sourceLang, targetLang, chunkIndex, chunkTotal, done, fail) {
         var parts = splitChunk(chunk);
         var result = [];
         var partIndex = 0;
@@ -1962,11 +1940,12 @@
             var part = parts[partIndex];
 
             if (!part) {
+                rememberTranslationChunk(cacheKey, chunk, result);
                 done(result);
                 return;
             }
 
-            translateCueChunkResilient(part, sourceLang, targetLang, chunkIndex + '.' + (partIndex + 1), chunkTotal, function (items) {
+            translateCueChunkResilient(cacheKey, part, sourceLang, targetLang, chunkIndex + '.' + (partIndex + 1), chunkTotal, function (items) {
                 result = result.concat(items || []);
                 partIndex++;
                 nextPart();
@@ -1976,7 +1955,7 @@
         nextPart();
     }
 
-    function translateCueFile(cues, sourceLang, targetLang, progress, done, fail) {
+    function translateCueFile(cacheKey, cues, sourceLang, targetLang, progress, done, fail) {
         var chunks = buildTranslationChunks(cues);
         var translatedItems = [];
         var index = 0;
@@ -1989,7 +1968,7 @@
                 return;
             }
 
-            translateCueChunkResilient(chunk, sourceLang, targetLang, index + 1, chunks.length, function (items) {
+            translateCueChunkResilient(cacheKey, chunk, sourceLang, targetLang, index + 1, chunks.length, function (items) {
                 translatedItems = translatedItems.concat(items || []);
                 index++;
 
@@ -2036,7 +2015,7 @@
         });
 
         if (!translatedCount) throw new Error('empty translation');
-        if (translatedCount < Math.max(1, Math.floor(cues.length * 0.95))) throw new Error('partial translation');
+        if (translatedCount < cues.length) throw new Error('partial translation');
 
         return translated;
     }
@@ -2062,7 +2041,7 @@
             progress: progress ? [progress] : []
         };
 
-        translateCueFile(cues, sourceLang, targetLang, function (current, total) {
+        translateCueFile(cacheKey, cues, sourceLang, targetLang, function (current, total) {
             var pending = translationPending[cacheKey];
 
             if (!pending) return;

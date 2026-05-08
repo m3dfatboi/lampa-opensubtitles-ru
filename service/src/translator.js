@@ -155,6 +155,17 @@ function translatedTextFromItem(item) {
   return item.text || item.translation || item.value || item.content || '';
 }
 
+function cloneTranslatedItems(items) {
+  return (items || []).map((item, index) => ({
+    id: translatedIdFromItem(item, index),
+    text: translatedTextFromItem(item)
+  }));
+}
+
+function chunkCacheKey(chunk) {
+  return (chunk || []).map((item) => String(item?.id)).join(',');
+}
+
 function normalizeChunkItems(chunk, items) {
   const expected = new Set(chunk.map((item) => String(item.id)));
 
@@ -207,7 +218,7 @@ function applyTranslatedItems(cues, items) {
   });
 
   if (!translatedCount) throw new Error('empty translation');
-  if (translatedCount < Math.max(1, Math.floor(source.length * 0.95))) throw new Error('partial translation');
+  if (translatedCount < source.length) throw new Error('partial translation');
 
   return translated;
 }
@@ -221,6 +232,29 @@ function splitChunk(chunk) {
   return [chunk.slice(0, middle), chunk.slice(middle)].filter((part) => part.length);
 }
 
+async function getCachedChunk(chunkCache, chunk) {
+  if (!chunkCache?.get) return null;
+
+  const items = await chunkCache.get(chunkCacheKey(chunk), chunk);
+  if (!items?.length) return null;
+
+  const normalized = normalizeChunkItems(chunk, items);
+  if (translatedCountForChunk(chunk, normalized) >= chunk.length) {
+    return cloneTranslatedItems(normalized);
+  }
+
+  return null;
+}
+
+async function saveCachedChunk(chunkCache, chunk, items) {
+  if (!chunkCache?.set || !chunk?.length) return;
+
+  const normalized = normalizeChunkItems(chunk, items);
+  if (translatedCountForChunk(chunk, normalized) < chunk.length) return;
+
+  await chunkCache.set(chunkCacheKey(chunk), cloneTranslatedItems(normalized), chunk);
+}
+
 export class Translator {
   constructor(config) {
     this.config = config;
@@ -231,7 +265,7 @@ export class Translator {
     return `v1:${this.config.openRouter.model}:${sourceLanguage}:${targetLanguage}:${sourceHash}`;
   }
 
-  async translate({ cues, sourceLanguage, targetLanguage, onProgress }) {
+  async translate({ cues, sourceLanguage, targetLanguage, onProgress, chunkCache }) {
     if (!this.config.openRouter.apiKey) throw new HttpError(500, 'OpenRouter API key is not configured');
 
     const chunks = buildChunks(cues, this.config);
@@ -242,7 +276,7 @@ export class Translator {
 
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
-      const items = await this.translateChunkResilient(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length);
+      const items = await this.translateChunkResilient(chunk, sourceLanguage, targetLanguage, index + 1, chunks.length, chunkCache);
       translatedItems.push(...items);
       if (onProgress) onProgress(`${index + 1}/${chunks.length}`);
       await sleep(50);
@@ -251,9 +285,14 @@ export class Translator {
     return applyTranslatedItems(cues, translatedItems);
   }
 
-  async translateChunkResilient(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal) {
+  async translateChunkResilient(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal, chunkCache) {
+    const cached = await getCachedChunk(chunkCache, chunk);
+    if (cached) return cached;
+
     try {
-      return await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal);
+      const items = await this.translateChunkWithFallback(chunk, sourceLanguage, targetLanguage, chunkIndex, chunkTotal);
+      await saveCachedChunk(chunkCache, chunk, items);
+      return items;
     }
     catch (error) {
       if (chunk.length <= 1 || !isSplittableTranslationError(error)) throw error;
@@ -262,10 +301,11 @@ export class Translator {
       const result = [];
 
       for (let index = 0; index < parts.length; index++) {
-        const partItems = await this.translateChunkResilient(parts[index], sourceLanguage, targetLanguage, `${chunkIndex}.${index + 1}`, chunkTotal);
+        const partItems = await this.translateChunkResilient(parts[index], sourceLanguage, targetLanguage, `${chunkIndex}.${index + 1}`, chunkTotal, chunkCache);
         result.push(...partItems);
       }
 
+      await saveCachedChunk(chunkCache, chunk, result);
       return result;
     }
   }
@@ -377,7 +417,7 @@ export class Translator {
       let items = normalizeTranslatedItems(parseJsonFromText(openRouterContent(json)));
       items = normalizeChunkItems(chunk, items);
 
-      if (translatedCountForChunk(chunk, items) < Math.max(1, Math.floor(chunk.length * 0.95))) {
+      if (translatedCountForChunk(chunk, items) < chunk.length) {
         throw new Error(`OpenRouter вернул неполный перевод на части ${chunkIndex} из ${chunkTotal}`);
       }
 

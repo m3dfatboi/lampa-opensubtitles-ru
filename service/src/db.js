@@ -69,6 +69,18 @@ export class Store {
         hits INTEGER NOT NULL DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS subtitle_chunk_cache (
+        cache_key TEXT NOT NULL,
+        chunk_key TEXT NOT NULL,
+        items_json TEXT NOT NULL,
+        items_count INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        hits INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(cache_key, chunk_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_subtitle_chunk_cache_key ON subtitle_chunk_cache(cache_key);
+
       CREATE TABLE IF NOT EXISTS translations (
         id TEXT PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -306,6 +318,45 @@ export class Store {
     );
   }
 
+  getCachedTranslationChunk(cacheKey, chunkKey) {
+    const row = this.db.prepare(`
+      SELECT items_json FROM subtitle_chunk_cache
+      WHERE cache_key = ? AND chunk_key = ?
+    `).get(cacheKey, chunkKey);
+
+    if (!row) return null;
+
+    this.db.prepare(`
+      UPDATE subtitle_chunk_cache
+      SET hits = hits + 1
+      WHERE cache_key = ? AND chunk_key = ?
+    `).run(cacheKey, chunkKey);
+
+    return JSON.parse(row.items_json);
+  }
+
+  saveCachedTranslationChunk(cacheKey, chunkKey, items) {
+    const safeItems = Array.isArray(items) ? items : [];
+
+    if (!cacheKey || !chunkKey || !safeItems.length) return;
+
+    this.db.prepare(`
+      INSERT OR REPLACE INTO subtitle_chunk_cache
+        (cache_key, chunk_key, items_json, items_count, created_at, hits)
+      VALUES (?, ?, ?, ?, COALESCE((SELECT created_at FROM subtitle_chunk_cache WHERE cache_key = ? AND chunk_key = ?), ?), COALESCE((SELECT hits FROM subtitle_chunk_cache WHERE cache_key = ? AND chunk_key = ?), 0))
+    `).run(
+      cacheKey,
+      chunkKey,
+      JSON.stringify(safeItems),
+      safeItems.length,
+      cacheKey,
+      chunkKey,
+      nowIso(),
+      cacheKey,
+      chunkKey
+    );
+  }
+
   findActiveJobByUserCache(userId, cacheKey) {
     return this.db.prepare(`
       SELECT * FROM translations
@@ -465,6 +516,7 @@ export class Store {
     const paid = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CAST(amount AS REAL)), 0) AS amount FROM payments WHERE status = 'paid'").get();
     const jobs = this.db.prepare('SELECT status, COUNT(*) AS count FROM translations GROUP BY status').all();
     const cache = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(hits), 0) AS hits FROM subtitle_cache').get();
-    return { users, paid, jobs, cache };
+    const chunkCache = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(hits), 0) AS hits FROM subtitle_chunk_cache').get();
+    return { users, paid, jobs, cache, chunkCache };
   }
 }
