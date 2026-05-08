@@ -41,6 +41,18 @@ TRANSLATION_MODEL=google/gemini-2.5-flash
 TRANSLATION_FALLBACK_MODEL=google/gemini-2.5-pro
 ```
 
+Если VPS не может подключиться к `api.telegram.org`, можно форсировать рабочий IPv4:
+
+```env
+TELEGRAM_API_IP=149.154.167.220
+```
+
+Альтернатива — собственный Cloudflare Worker proxy в формате SotoPong (`{"method":"sendMessage", ...params}`):
+
+```env
+TELEGRAM_PROXY_URL=https://your-worker.example.workers.dev
+```
+
 Для оплат:
 
 ```env

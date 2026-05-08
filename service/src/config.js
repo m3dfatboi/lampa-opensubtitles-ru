@@ -88,6 +88,10 @@ export function createConfig(rootDir = process.cwd()) {
     telegram: {
       token: process.env.TELEGRAM_BOT_TOKEN || '',
       username: (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, ''),
+      apiHost: process.env.TELEGRAM_API_HOST || 'api.telegram.org',
+      apiIp: process.env.TELEGRAM_API_IP || '',
+      apiTimeoutMs: intEnv('TELEGRAM_API_TIMEOUT_MS', 15000),
+      proxyUrl: (process.env.TELEGRAM_PROXY_URL || '').replace(/\/+$/, ''),
       admins: listEnv('ADMIN_TELEGRAM_IDS'),
       unlimitedUsers: listEnv('UNLIMITED_TELEGRAM_IDS')
     },

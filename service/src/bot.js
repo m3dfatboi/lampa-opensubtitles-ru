@@ -1,3 +1,4 @@
+import https from 'node:https';
 import { sleep } from './utils.js';
 
 function mainKeyboard() {
@@ -19,6 +20,73 @@ function isAdmin(config, telegramId) {
   return config.telegram.admins.includes(String(telegramId));
 }
 
+function postJson(options, payload) {
+  const body = JSON.stringify(payload);
+
+  return new Promise((resolve, reject) => {
+    const request = https.request({
+      method: 'POST',
+      timeout: options.timeoutMs,
+      hostname: options.hostname,
+      port: options.port || 443,
+      path: options.path,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      },
+      lookup: options.lookup
+    }, (response) => {
+      let responseBody = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        responseBody += chunk;
+      });
+      response.on('end', () => {
+        let json = null;
+        try {
+          json = responseBody ? JSON.parse(responseBody) : null;
+        }
+        catch (error) {
+          reject(error);
+          return;
+        }
+        resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, json });
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(new Error(`Telegram request timed out after ${options.timeoutMs}ms`));
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+}
+
+async function directTelegramRequest(config, method, payload) {
+  const host = config.telegram.apiHost || 'api.telegram.org';
+  const forcedIp = config.telegram.apiIp;
+  const lookup = forcedIp
+    ? (hostname, lookupOptions, callback) => callback(null, forcedIp, 4)
+    : undefined;
+
+  return postJson({
+    timeoutMs: config.telegram.apiTimeoutMs,
+    hostname: host,
+    path: `/bot${config.telegram.token}/${method}`,
+    lookup
+  }, payload);
+}
+
+async function proxyTelegramRequest(config, method, payload) {
+  const url = new URL(config.telegram.proxyUrl);
+  return postJson({
+    timeoutMs: config.telegram.apiTimeoutMs,
+    hostname: url.hostname,
+    port: url.port || 443,
+    path: `${url.pathname || '/'}${url.search || ''}`
+  }, { method, ...payload });
+}
+
 export class TelegramBot {
   constructor(config, service, store) {
     this.config = config;
@@ -34,14 +102,13 @@ export class TelegramBot {
 
   async api(method, payload) {
     if (!this.enabled) return null;
-    const response = await fetch(`https://api.telegram.org/bot${this.config.telegram.token}/${method}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const json = await response.json().catch(() => null);
-    if (!response.ok || !json?.ok) throw new Error(json?.description || `Telegram ${method} failed`);
-    return json.result;
+
+    const response = this.config.telegram.proxyUrl
+      ? await proxyTelegramRequest(this.config, method, payload)
+      : await directTelegramRequest(this.config, method, payload);
+
+    if (!response.ok || !response.json?.ok) throw new Error(response.json?.description || `Telegram ${method} failed`);
+    return response.json.result;
   }
 
   async sendMessage(chatId, text, extra = {}) {
