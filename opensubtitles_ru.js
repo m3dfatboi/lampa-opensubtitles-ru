@@ -1135,6 +1135,16 @@
         return tracks && tracks.length ? Array.prototype.slice.call(tracks) : [];
     }
 
+    function silenceNativeTextTracks() {
+        var tracks = currentVideoTextTracks();
+        for (var i = 0; i < tracks.length; i++) {
+            try {
+                if (tracks[i] && tracks[i].mode === 'showing') tracks[i].mode = 'hidden';
+            }
+            catch (e) {}
+        }
+    }
+
     function nativeMediaKey() {
         var data = lastPlayerData || {};
         var card = activeCard(data);
@@ -2814,6 +2824,8 @@
                 try { Lampa.PlayerVideo.subsview(true); } catch (e) {}
             }
 
+            silenceNativeTextTracks();
+
             clearInterval(self.timer);
             self.timer = setInterval(function () {
                 self.update();
@@ -2828,6 +2840,8 @@
             var text = '';
 
             if (!this.current || !this.cues.length) return;
+
+            silenceNativeTextTracks();
 
             for (var i = 0; i < this.cues.length; i++) {
                 if (time >= this.cues[i].start && time <= this.cues[i].end) {
