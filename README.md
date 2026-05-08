@@ -59,12 +59,13 @@ English, Русский, Español, Français, Deutsch, Italiano, Português, Pol
 
 ## Отдельные сборки
 
-- `opensubtitles_ru.js` — текущая основная сборка.
+- `opensubtitles_ru.js` — сервисная сборка на старой ссылке для уже установленных пользователей.
 - `opensubtitles_ru_personal.js` — сохраненная личная сборка с прямым OpenRouter ключом в настройках.
-- `opensubtitles_ru_service.js` — платная сервисная сборка: Telegram-привязка, QR-код и перевод через backend с кредитами.
+- `opensubtitles_ru_service.js` — та же сервисная сборка на отдельной новой ссылке.
 
 GitHub Pages ссылки:
 
+- `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
 - `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_personal.js`
 - `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_service.js`
 

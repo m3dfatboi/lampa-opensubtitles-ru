@@ -4,9 +4,9 @@
 
 ## Ссылки плагинов
 
+- Платный сервисный вариант на старой ссылке: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
+- Платный сервисный вариант на отдельной новой ссылке: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_service.js`
 - Личный вариант с прямым OpenRouter ключом: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_personal.js`
-- Платный сервисный вариант: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru_service.js`
-- Текущий основной файл остается на прежней ссылке: `https://m3dfatboi.github.io/lampa-opensubtitles-ru/opensubtitles_ru.js`
 
 ## Модель
 

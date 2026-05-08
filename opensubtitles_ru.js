@@ -2,7 +2,7 @@
     'use strict';
 
     var PLUGIN_ID = 'opensubtitles_ru';
-    var PLUGIN_TITLE = 'OpenSubtitles';
+    var PLUGIN_TITLE = 'OpenSubtitles Translate';
     var DEFAULT_LANG = 'rus';
 
     var ADDONS = [
@@ -22,12 +22,12 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v13-openrouter-translate';
+    var PLUGIN_VERSION = 'v2-service-old-url';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
-    var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-    var DEFAULT_OPENROUTER_MODEL = 'openrouter/auto';
-    var TRANSLATION_BATCH_SIZE = 60;
-    var TRANSLATION_BATCH_CHARS = 6000;
+    var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
+    var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
+    var SERVICE_POLL_INTERVAL = 2500;
+    var SERVICE_POLL_TIMEOUT = 180000;
 
     var EXTRA_LANGUAGE_META = {
         jpn: { iso2: 'ja', name: 'Japanese', aliases: ['japanese'] },
@@ -61,7 +61,7 @@
     var Lampa = window.Lampa;
     var network = new Lampa.Reguest();
     var subtitleNetwork = new Lampa.Reguest();
-    var translationNetwork = new Lampa.Reguest();
+    var serviceNetwork = new Lampa.Reguest();
     var activePlayerId = 0;
     var lastPlayerData = null;
     var lastKnownSubs = [];
@@ -287,35 +287,49 @@
                 default: true
             },
             field: {
-                name: 'Автоперевод через OpenRouter'
+                name: 'Автоперевод по кредитам'
             }
         });
 
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_openrouter_key',
+                name: PLUGIN_ID + '_service_url',
                 type: 'input',
                 values: '',
-                placeholder: 'sk-or-...',
-                default: ''
+                placeholder: SERVICE_API_BASE,
+                default: SERVICE_API_BASE
             },
             field: {
-                name: 'OpenRouter API key'
+                name: 'Сервер перевода'
             }
         });
 
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_openrouter_model',
+                name: PLUGIN_ID + '_telegram_bot',
                 type: 'input',
                 values: '',
-                placeholder: DEFAULT_OPENROUTER_MODEL,
-                default: DEFAULT_OPENROUTER_MODEL
+                placeholder: TELEGRAM_BOT_URL,
+                default: TELEGRAM_BOT_URL
             },
             field: {
-                name: 'Модель OpenRouter'
+                name: 'Telegram бот'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
+                name: PLUGIN_ID + '_connect',
+                type: 'button'
+            },
+            field: {
+                name: 'Подключить Telegram'
+            },
+            onChange: function () {
+                showServiceConnectModal();
             }
         });
 
@@ -359,12 +373,70 @@
         return storageBool(PLUGIN_ID + '_translate_enabled', true);
     }
 
-    function openRouterKey() {
-        return (storage(PLUGIN_ID + '_openrouter_key', '') || '').trim();
+    function serviceBaseUrl() {
+        return ((storage(PLUGIN_ID + '_service_url', SERVICE_API_BASE) || SERVICE_API_BASE) + '').trim().replace(/\/+$/, '');
     }
 
-    function openRouterModel() {
-        return (storage(PLUGIN_ID + '_openrouter_model', DEFAULT_OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
+    function telegramBotUrl() {
+        return ((storage(PLUGIN_ID + '_telegram_bot', TELEGRAM_BOT_URL) || TELEGRAM_BOT_URL) + '').trim().replace(/\/+$/, '');
+    }
+
+    function deviceToken() {
+        return (storage(PLUGIN_ID + '_device_token', '') || '').trim();
+    }
+
+    function saveDeviceToken(token) {
+        if (token) Lampa.Storage.set(PLUGIN_ID + '_device_token', token);
+    }
+
+    function deviceId() {
+        var id = storage(PLUGIN_ID + '_device_id', '');
+
+        if (!id) {
+            id = 'lmp-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+            Lampa.Storage.set(PLUGIN_ID + '_device_id', id);
+        }
+
+        return id;
+    }
+
+    function platformName() {
+        var names = ['android', 'webos', 'tizen', 'apple_tv', 'browser', 'msx'];
+
+        if (!Lampa.Platform || !Lampa.Platform.is) return 'unknown';
+
+        for (var i = 0; i < names.length; i++) {
+            try {
+                if (Lampa.Platform.is(names[i])) return names[i];
+            }
+            catch (e) {}
+        }
+
+        return 'unknown';
+    }
+
+    function serviceUrl(path) {
+        return serviceBaseUrl() + path;
+    }
+
+    function serviceRequest(path, body, done, fail, options) {
+        var params = {
+            dataType: 'json',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+        var token = options && options.token !== false ? deviceToken() : '';
+        var postData = body ? JSON.stringify(body) : false;
+        var net = new Lampa.Reguest();
+
+        if (token) params.headers.Authorization = 'Bearer ' + token;
+        if (body) params.type = 'POST';
+
+        net.timeout(options && options.timeout || 45000);
+        net.silent(serviceUrl(path), done, fail, postData, params);
+
+        return net;
     }
 
     function activeCard(data) {
@@ -1485,178 +1557,243 @@
             .replace(/&amp;/g, '&');
     }
 
-    function buildTranslationBatches(cues) {
-        var batches = [];
-        var current = [];
-        var chars = 0;
+    function serviceBotLink(code) {
+        var base = telegramBotUrl();
+        var joiner = base.indexOf('?') >= 0 ? '&' : '?';
 
-        cues.forEach(function (cue, index) {
-            var text = cueTextToPlain(cue.text);
-            var entry = {
-                id: index,
-                index: index,
-                text: text
-            };
-            var length = text.length;
-
-            if (current.length && (current.length >= TRANSLATION_BATCH_SIZE || chars + length > TRANSLATION_BATCH_CHARS)) {
-                batches.push(current);
-                current = [];
-                chars = 0;
-            }
-
-            current.push(entry);
-            chars += length;
-        });
-
-        if (current.length) batches.push(current);
-
-        return batches;
+        return base + joiner + 'start=' + encodeURIComponent(code || '');
     }
 
-    function openRouterHeaders() {
-        return {
-            Authorization: 'Bearer ' + openRouterKey(),
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://m3dfatboi.github.io/lampa-opensubtitles-ru/',
-            'X-OpenRouter-Title': 'Lampa OpenSubtitles'
-        };
-    }
+    function showServiceConnectModal(onLinked) {
+        var base = serviceBaseUrl();
+        var prevController = captureController();
 
-    function parseJsonFromText(text) {
-        var content = (text || '').trim();
-        var start;
-        var end;
-
-        if (!content) throw new Error('empty response');
-
-        content = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-
-        try {
-            return JSON.parse(content);
-        }
-        catch (e) {
-            start = content.indexOf('{');
-            end = content.lastIndexOf('}');
-
-            if (start >= 0 && end > start) return JSON.parse(content.substring(start, end + 1));
-
-            throw e;
-        }
-    }
-
-    function openRouterContent(json) {
-        var message = json && json.choices && json.choices[0] && json.choices[0].message;
-        var content = message && message.content;
-
-        if (Array.isArray(content)) {
-            return content.map(function (part) {
-                return part && (part.text || part.content || '');
-            }).join('');
+        if (!base || /example\.com/i.test(base)) {
+            notify('Укажите адрес сервера перевода в настройках ' + PLUGIN_TITLE);
+            return;
         }
 
-        return content || '';
-    }
+        notify('Создаю код подключения...');
 
-    function normalizeTranslatedItems(parsed) {
-        var items = parsed && (parsed.items || parsed.translations || parsed.result || parsed);
+        serviceRequest('/v1/devices/session', {
+            device_id: deviceId(),
+            plugin_version: PLUGIN_VERSION,
+            platform: platformName(),
+            target_language: selectedLanguage().code
+        }, function (session) {
+            var code = session && (session.code || session.link_code);
+            var sessionId = session && (session.session_id || session.id);
+            var link = session && session.bot_url || serviceBotLink(code);
+            var html;
+            var timer = 0;
+            var started = Date.now();
 
-        if (!Array.isArray(items)) throw new Error('bad translation format');
-
-        return items;
-    }
-
-    function translateCueBatch(batch, sourceLang, targetLang, done, fail) {
-        var sourceName = promptLanguageName(sourceLang);
-        var targetName = promptLanguageName(targetLang);
-        var body = {
-            model: openRouterModel(),
-            temperature: 0.1,
-            messages: [
-                {
-                    role: 'system',
-                    content: 'You translate subtitle cues. Preserve meaning, tone, line breaks, punctuation, names, timing intent, and cue count. Return only valid JSON.'
-                },
-                {
-                    role: 'user',
-                    content: JSON.stringify({
-                        source_language: sourceName,
-                        target_language: targetName,
-                        instructions: 'Translate each item.text. Keep the same numeric id. Do not merge, split, skip, add commentary, or wrap in Markdown. Output exactly {"items":[{"id":number,"text":"translated text"}]}.',
-                        items: batch.map(function (entry) {
-                            return {
-                                id: entry.id,
-                                text: entry.text
-                            };
-                        })
-                    })
-                }
-            ]
-        };
-
-        translationNetwork.timeout(90000);
-        translationNetwork.silent(OPENROUTER_URL, function (json) {
-            var parsed;
-
-            try {
-                parsed = normalizeTranslatedItems(parseJsonFromText(openRouterContent(json)));
-                done(parsed);
-            }
-            catch (e) {
-                fail({ message: 'не удалось разобрать ответ OpenRouter' });
-            }
-        }, function (xhr) {
-            fail(xhr);
-        }, JSON.stringify(body), {
-            dataType: 'json',
-            type: 'POST',
-            headers: openRouterHeaders()
-        });
-    }
-
-    function translateCues(cues, sourceLang, targetLang, progress, done, fail) {
-        var batches = buildTranslationBatches(cues);
-        var translated = cues.map(function (cue) {
-            return {
-                start: cue.start,
-                end: cue.end,
-                text: cue.text
-            };
-        });
-        var cursor = 0;
-
-        function next() {
-            var batch = batches[cursor];
-
-            if (!batch) {
-                done(translated);
+            if (!code || !sessionId) {
+                notify(PLUGIN_TITLE + ': сервер не вернул код подключения');
                 return;
             }
 
-            translateCueBatch(batch, sourceLang, targetLang, function (items) {
-                var byId = {};
+            html = $('<div class="account-modal-split opensub-service-connect">' +
+                '<div class="account-modal-split__qr">' +
+                    '<div class="account-modal-split__qr-code"></div>' +
+                    '<div class="account-modal-split__qr-text">Сканируйте QR-код телефоном</div>' +
+                '</div>' +
+                '<div class="account-modal-split__info">' +
+                    '<div class="account-modal-split__title">Подключите Telegram</div>' +
+                    '<div class="account-modal-split__text">' +
+                        '<p>Откройте бота и отправьте код:</p>' +
+                        '<div style="font-size:2.2em;font-weight:700;letter-spacing:.12em;margin:.6em 0">' + escapeHtml(code) + '</div>' +
+                        '<p style="word-break:break-all">' + escapeHtml(link) + '</p>' +
+                        '<div class="simple-button selector opensub-service-copy">Скопировать ссылку</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>');
 
-                items.forEach(function (item) {
-                    if (typeof item.id !== 'undefined') byId[item.id] = item.text;
+            if (Lampa.Utils && Lampa.Utils.qrcode) {
+                Lampa.Utils.qrcode(link, html.find('.account-modal-split__qr-code'), function () {
+                    html.find('.account-modal-split__qr-code').text(code);
                 });
+            }
 
-                batch.forEach(function (entry) {
-                    var text = byId[entry.id];
+            html.find('.opensub-service-copy').on('hover:enter', function () {
+                if (Lampa.Utils && Lampa.Utils.copyTextToClipboard) {
+                    Lampa.Utils.copyTextToClipboard(link, function () {
+                        notify('Ссылка скопирована');
+                    }, function () {
+                        notify(link);
+                    });
+                }
+                else notify(link);
+            });
 
-                    if (typeof text === 'string' && text.trim()) {
-                        translated[entry.index].text = cleanSubtitleText(text);
+            function closeModal() {
+                clearInterval(timer);
+                if (Lampa.Modal && Lampa.Modal.close) Lampa.Modal.close();
+                returnToController(prevController);
+            }
+
+            function checkSession() {
+                if (Date.now() - started > SERVICE_POLL_TIMEOUT) {
+                    clearInterval(timer);
+                    notify('Код подключения устарел. Создайте новый код.');
+                    return;
+                }
+
+                serviceRequest('/v1/devices/session/' + encodeURIComponent(sessionId), false, function (status) {
+                    var token = status && (status.device_token || status.token);
+                    var balance = status && (status.balance || status.credits);
+
+                    if (status && (status.status === 'linked' || token)) {
+                        saveDeviceToken(token);
+                        clearInterval(timer);
+                        notify('Telegram подключен' + (typeof balance !== 'undefined' ? '. Баланс: ' + balance + ' кредитов' : ''));
+                        closeModal();
+                        if (onLinked) onLinked(status);
                     }
+                }, function (xhr) {
+                    logDebug('device session check error', xhr && xhr.status);
+                }, {
+                    token: false,
+                    timeout: 15000
                 });
+            }
 
-                cursor++;
+            if (Lampa.Modal && Lampa.Modal.open) {
+                Lampa.Modal.open({
+                    title: '',
+                    html: html,
+                    size: 'full',
+                    scroll: {
+                        nopadding: true
+                    },
+                    onBack: closeModal
+                });
+            }
+            else notify('Откройте Telegram: ' + link);
 
-                if (progress) progress(cursor, batches.length);
+            timer = setInterval(checkSession, SERVICE_POLL_INTERVAL);
+            checkSession();
+        }, function (xhr) {
+            notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
+        }, {
+            token: false
+        });
+    }
 
-                next();
-            }, fail);
+    function serviceMediaInfo() {
+        var card = activeCard(lastPlayerData);
+        var episode = parseEpisode(lastPlayerData || {});
+
+        return {
+            imdb_id: card && card.imdb_id || '',
+            tmdb_id: card && card.id || '',
+            type: isSeries(card, lastPlayerData) ? 'series' : 'movie',
+            title: card && (card.title || card.name) || lastPlayerData && lastPlayerData.title || '',
+            original_title: card && (card.original_title || card.original_name) || '',
+            original_language: originalLanguageCode(card),
+            season: episode.season,
+            episode: episode.episode
+        };
+    }
+
+    function sourceCuePayload(cues) {
+        return cues.map(function (cue) {
+            return {
+                start: cue.start,
+                end: cue.end,
+                text: cueTextToPlain(cue.text)
+            };
+        });
+    }
+
+    function serviceCues(result) {
+        var cues = result && (result.cues || result.items || result.subtitles);
+
+        if (!cues && result && result.translation) cues = result.translation.cues || result.translation.items;
+        if (!cues && result && result.subtitle_text) return parseSubtitles(result.subtitle_text);
+        if (!Array.isArray(cues)) return [];
+
+        return cues.map(function (cue) {
+            var start = Number(cue.start_ms || cue.start || 0);
+            var end = Number(cue.end_ms || cue.end || 0);
+            var text = cue.text || cue.value || '';
+
+            return {
+                start: start,
+                end: end,
+                text: cleanSubtitleText(text)
+            };
+        }).filter(function (cue) {
+            return cue.end > cue.start && cue.text;
+        });
+    }
+
+    function startServiceTranslation(item, rawText, cues, progress, done, fail) {
+        var body = {
+            device_id: deviceId(),
+            plugin_version: PLUGIN_VERSION,
+            source_url: item.sourceUrl || item.url,
+            source_language: item.sourceLang,
+            target_language: item.targetLang || selectedLanguage().code,
+            media: serviceMediaInfo(),
+            subtitle: {
+                text: rawText || '',
+                cues: sourceCuePayload(cues),
+                cues_count: cues.length
+            }
+        };
+
+        serviceRequest('/v1/translations', body, function (result) {
+            var jobId = result && (result.job_id || result.id);
+
+            if (result && (result.status === 'completed' || result.cues || result.subtitle_text || result.translation)) {
+                done(serviceCues(result), result);
+                return;
+            }
+
+            if (!jobId) {
+                fail({ message: 'сервер не вернул задачу перевода' });
+                return;
+            }
+
+            pollServiceTranslation(jobId, progress, done, fail);
+        }, fail, {
+            timeout: 60000
+        });
+    }
+
+    function pollServiceTranslation(jobId, progress, done, fail) {
+        var started = Date.now();
+
+        function tick() {
+            if (Date.now() - started > SERVICE_POLL_TIMEOUT) {
+                fail({ message: 'перевод занимает слишком много времени' });
+                return;
+            }
+
+            serviceRequest('/v1/translations/' + encodeURIComponent(jobId), false, function (result) {
+                var status = result && result.status;
+                var message = result && (result.message || result.error);
+
+                if (status === 'completed' || result.cues || result.subtitle_text || result.translation) {
+                    done(serviceCues(result), result);
+                    return;
+                }
+
+                if (status === 'failed' || status === 'error') {
+                    fail({ message: message || 'ошибка перевода' });
+                    return;
+                }
+
+                if (progress) progress(result && (result.progress || result.stage || status || 'processing'));
+
+                setTimeout(tick, SERVICE_POLL_INTERVAL);
+            }, fail, {
+                timeout: 30000
+            });
         }
 
-        next();
+        tick();
     }
 
     var renderer = {
@@ -1714,13 +1851,14 @@
         },
         selectTranslated: function (item) {
             var self = this;
-            var key = openRouterKey();
             var targetLang = item.targetLang || selectedLanguage().code;
 
             logDebug('renderer.selectTranslated', item && item.url, item && item.sourceLang, '→', targetLang);
 
-            if (!key) {
-                notify('Укажите OpenRouter API key в настройках OpenSubtitles');
+            if (!deviceToken()) {
+                showServiceConnectModal(function () {
+                    renderer.selectTranslated(item);
+                });
                 return;
             }
 
@@ -1736,7 +1874,7 @@
             item.selected = true;
 
             showSubtitleText('');
-            notify('Перевожу субтитры с ' + languageName(item.sourceLang) + '...');
+            notify('Отправляю субтитры на перевод...');
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.sourceUrl || item.url, function (text) {
@@ -1757,15 +1895,21 @@
                     return;
                 }
 
-                translateCues(sourceCues, item.sourceLang, targetLang, function (current, total) {
-                    if (self.current === item) notify('Перевод субтитров: ' + current + '/' + total);
-                }, function (translatedCues) {
+                startServiceTranslation(item, text || '', sourceCues, function (state) {
+                    if (self.current === item) notify('Перевод субтитров: ' + state);
+                }, function (translatedCues, result) {
                     if (self.current !== item) return;
 
                     self.cues = translatedCues;
                     self.loading = false;
 
-                    notify('Автоперевод готов');
+                    if (!self.cues.length) {
+                        notify(PLUGIN_TITLE + ': сервер вернул пустой перевод');
+                        self.disable();
+                        return;
+                    }
+
+                    notify('Автоперевод готов' + (result && result.balance !== undefined ? '. Баланс: ' + result.balance + ' кредитов' : ''));
                     self.start();
                 }, function (xhr) {
                     if (self.current !== item) return;
@@ -1829,7 +1973,7 @@
 
             clearInterval(this.timer);
             subtitleNetwork.clear();
-            translationNetwork.clear();
+            serviceNetwork.clear();
 
             this.timer = 0;
             this.cues = [];
@@ -1981,7 +2125,7 @@
         manualOverride = null;
         renderer.destroy();
         network.clear();
-        translationNetwork.clear();
+        serviceNetwork.clear();
     }
 
     function injectOriginalTitle(body, movie) {
