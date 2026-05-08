@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v6-service-native-first-single-file';
+    var PLUGIN_VERSION = 'v7-service-subtitle-priority-order';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://example.com/lampa-translate/api';
     var TELEGRAM_BOT_URL = 'https://t.me/YOUR_BOT';
@@ -1740,7 +1740,7 @@
             nativeTranslated = nativeTranslationCandidates(base, activeCard(lastPlayerData));
         }
 
-        externalTranslated = nativeTranslated.length ? [] : translatedSubs;
+        externalTranslated = translatedSubs;
 
         var hasTranslated = nativeTranslated.length > 0 || externalTranslated.length > 0;
 
@@ -1755,21 +1755,21 @@
 
         base.forEach(function (item) { mixed.push(item); });
 
-        nativeTranslated.forEach(function (item) {
-            mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
-        });
-
         if (hasResults) {
             stremioSubs.forEach(function (item) {
                 mixed.push(createSubtitleItem(item, nextIndex++));
             });
         }
-        else if (hasTranslated) {
-            externalTranslated.forEach(function (item) {
-                mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
-            });
-        }
-        else {
+
+        nativeTranslated.forEach(function (item) {
+            mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
+        });
+
+        externalTranslated.forEach(function (item) {
+            mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
+        });
+
+        if (!hasResults && !hasTranslated) {
             var status = statusSubtitle(nextIndex++);
             if (status) mixed.push(status);
         }

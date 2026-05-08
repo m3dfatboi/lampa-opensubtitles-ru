@@ -93,7 +93,7 @@ Request:
 ```json
 {
   "device_id": "lmp-...",
-  "plugin_version": "v6-service-native-first-single-file",
+  "plugin_version": "v7-service-subtitle-priority-order",
   "platform": "android",
   "target_language": "rus"
 }
