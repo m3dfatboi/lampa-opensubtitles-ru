@@ -4,11 +4,34 @@ import { sleep } from './utils.js';
 function mainKeyboard() {
   return {
     keyboard: [
+      [{ text: 'Ввести код' }],
       [{ text: 'Баланс' }, { text: 'Купить кредиты' }],
       [{ text: 'Мои устройства' }, { text: 'Помощь' }]
     ],
     resize_keyboard: true
   };
+}
+
+function startText() {
+  return [
+    'Привет. Я бот ИИ-перевода субтитров для Lampa.',
+    '',
+    'Я привязываю Lampa к вашему балансу, показываю кредиты и помогаю купить переводы после бесплатного лимита.',
+    '',
+    'Чтобы подключить устройство, откройте окно привязки в плагине OpenSubtitles и отправьте сюда код из 6 символов. Например: ABC123.',
+    '',
+    'Если вы сканировали QR-код, код обычно передается автоматически.'
+  ].join('\n');
+}
+
+function codePromptText() {
+  return 'Отправьте код из окна привязки Lampa одним сообщением. Код состоит из 6 символов, например ABC123.';
+}
+
+function extractLinkCode(text) {
+  const normalized = String(text || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+  if (/^[A-Z0-9]{6}$/.test(normalized)) return normalized;
+  return '';
 }
 
 function userTitle(user) {
@@ -193,23 +216,35 @@ export class TelegramBot {
       if (code) return this.linkDevice(chatId, user, code);
 
       this.store.ensureUser(user);
-      return this.sendMessage(chatId, 'Привет. Я подключаю автоперевод субтитров для Lampa и показываю баланс кредитов.', {
+      return this.sendMessage(chatId, startText(), {
         reply_markup: mainKeyboard()
       });
     }
 
     if (text.startsWith('/')) return this.handleCommand(chatId, user, text);
 
+    if (/ввести\s+код/i.test(text)) return this.sendMessage(chatId, codePromptText(), { reply_markup: mainKeyboard() });
+
+    const linkCode = extractLinkCode(text);
+    if (linkCode) return this.linkDevice(chatId, user, linkCode);
+
     if (/баланс/i.test(text)) return this.showBalance(chatId, user);
     if (/купить/i.test(text)) return this.showPackages(chatId, user);
     if (/устройств/i.test(text)) return this.showDevices(chatId, user);
     if (/помощ/i.test(text)) return this.showHelp(chatId);
 
-    return this.sendMessage(chatId, 'Выберите действие на клавиатуре ниже.', { reply_markup: mainKeyboard() });
+    return this.sendMessage(chatId, 'Если хотите подключить Lampa, отправьте код из окна привязки. Или выберите действие на клавиатуре ниже.', { reply_markup: mainKeyboard() });
   }
 
   async handleCommand(chatId, telegramUser, text) {
-    const [command, arg1, arg2, arg3] = text.split(/\s+/);
+    const [commandRaw, arg1, arg2, arg3] = text.split(/\s+/);
+    const command = String(commandRaw || '').toLowerCase();
+
+    if (command === '/help') return this.showHelp(chatId);
+    if (command === '/code' || command === '/connect' || command === '/link') {
+      return this.sendMessage(chatId, codePromptText(), { reply_markup: mainKeyboard() });
+    }
+    if (command === '/balance' && !arg1) return this.showBalance(chatId, telegramUser);
 
     if (!isAdmin(this.config, telegramUser.id)) {
       return this.sendMessage(chatId, 'Команда не найдена.', { reply_markup: mainKeyboard() });
@@ -256,8 +291,6 @@ export class TelegramBot {
       const ok = this.store.revokeDevice(target.id, arg2);
       return this.sendMessage(chatId, ok ? 'Устройство отвязано.' : 'Устройство не найдено.');
     }
-
-    if (command === '/help') return this.showHelp(chatId);
 
     return this.sendMessage(chatId, [
       'Админ-команды:',
@@ -309,14 +342,14 @@ export class TelegramBot {
 
   async linkDevice(chatId, telegramUser, code) {
     try {
-      const result = this.service.linkDeviceByCode(code, telegramUser);
+      const result = this.service.linkDeviceByCode(extractLinkCode(code) || code, telegramUser);
       const balance = result.user.unlimited ? 'безлимит' : `${result.user.balance} кредитов`;
       return this.sendMessage(chatId, `Готово, Lampa подключена.\nБаланс: ${balance}`, {
         reply_markup: mainKeyboard()
       });
     }
     catch (error) {
-      return this.sendMessage(chatId, error.message || 'Не удалось привязать устройство.', {
+      return this.sendMessage(chatId, `${error.message || 'Не удалось привязать устройство.'}\n\n${codePromptText()}`, {
         reply_markup: mainKeyboard()
       });
     }
@@ -353,7 +386,7 @@ export class TelegramBot {
     const user = this.store.ensureUser(telegramUser);
     const devices = this.store.listUserDevices(user.id).filter((device) => !device.revoked_at);
 
-    if (!devices.length) return this.sendMessage(chatId, 'Устройства пока не подключены. Откройте сервисный плагин в Lampa и отсканируйте QR-код.');
+    if (!devices.length) return this.sendMessage(chatId, 'Устройства пока не подключены. Откройте окно привязки в плагине OpenSubtitles и отправьте сюда код из Lampa.');
 
     const lines = devices.map((device, index) => {
       const name = device.platform || 'unknown';
@@ -373,8 +406,8 @@ export class TelegramBot {
     return this.sendMessage(chatId, [
       'Как подключить:',
       '1. Откройте Lampa -> настройки OpenSubtitles.',
-      '2. Выберите AI-субтитры в плеере.',
-      '3. Если плагин попросит Telegram, отсканируйте QR-код или откройте ссылку.',
+      '2. Выберите ИИ-субтитры в плеере.',
+      '3. Если плагин попросит Telegram, отправьте сюда код из окна привязки или отсканируйте QR-код.',
       '',
       'Кредиты списываются только когда перевод успешно готов. Если перевод упал, резерв возвращается.'
     ].join('\n'), { reply_markup: mainKeyboard() });
