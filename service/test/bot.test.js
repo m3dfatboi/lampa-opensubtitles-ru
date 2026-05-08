@@ -8,7 +8,7 @@ function createBot(overrides = {}) {
   const bot = new TelegramBot({
     telegram: {
       token: 'test-token',
-      admins: [],
+      admins: overrides.admins || [],
       unlimitedUsers: [],
       apiHost: 'api.telegram.org',
       apiIp: '',
@@ -33,6 +33,14 @@ function createBot(overrides = {}) {
   }, {
     ensureUser: (user) => ({ id: user.id, ...user }),
     listUserTranslations: () => [],
+    stats: () => ({
+      users: 0,
+      paid: { count: 0, amount: 0 },
+      cache: { count: 0, hits: 0 },
+      jobs: []
+    }),
+    countLinkedUsers: () => 0,
+    listLinkedUsers: () => [],
     ...overrides.store
   });
 
@@ -98,6 +106,64 @@ test('bot reports empty history when user has no translations', async () => {
   });
 
   assert.match(sent[0].text, /История переводов пуста/);
+});
+
+test('admin /stats includes a clickable list of linked users', async () => {
+  const users = [{
+    id: 1,
+    telegram_id: '11111',
+    username: 'vanya',
+    first_name: 'Иван',
+    balance: 30,
+    unlimited: 0,
+    blocked: 0,
+    translations_done: 5,
+    credits_spent: 7
+  }, {
+    id: 2,
+    telegram_id: '22222',
+    username: '',
+    first_name: 'Anna',
+    balance: 0,
+    unlimited: 1,
+    blocked: 0,
+    translations_done: 12,
+    credits_spent: 0
+  }, {
+    id: 3,
+    telegram_id: '33333',
+    username: 'spam',
+    first_name: 'Spammer',
+    balance: 0,
+    unlimited: 0,
+    blocked: 1,
+    translations_done: 0,
+    credits_spent: 0
+  }];
+  const { bot, sent } = createBot({
+    admins: ['42'],
+    store: {
+      countLinkedUsers: () => users.length,
+      listLinkedUsers: () => users
+    }
+  });
+
+  await bot.handleMessage({
+    text: '/stats',
+    from: { id: 42, username: 'admin' },
+    chat: { id: 100 }
+  });
+
+  const text = sent[0].text;
+  assert.match(text, /Пользователи с Telegram/);
+  assert.match(text, /tg:\/\/user\?id=11111/);
+  assert.match(text, /@vanya/);
+  assert.match(text, /Иван/);
+  assert.match(text, /30 кр\./);
+  assert.match(text, /безлимит/);
+  assert.match(text, /blocked/);
+  assert.match(text, /5 перев\./);
+  assert.match(text, /-7 кр\./);
 });
 
 test('bot formats history with title, langs, credits and date', async () => {

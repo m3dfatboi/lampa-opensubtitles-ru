@@ -287,6 +287,24 @@ export class Store {
     return this.db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(String(telegramId));
   }
 
+  countLinkedUsers() {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE telegram_id NOT LIKE 'anon:%'").get();
+    return row ? row.count : 0;
+  }
+
+  listLinkedUsers(limit = 30) {
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
+    return this.db.prepare(`
+      SELECT u.id, u.telegram_id, u.username, u.first_name, u.balance, u.unlimited, u.blocked, u.created_at, u.updated_at,
+             (SELECT COUNT(*) FROM translations t WHERE t.user_id = u.id AND t.status = 'completed') AS translations_done,
+             (SELECT COALESCE(SUM(credits_spent), 0) FROM translations t WHERE t.user_id = u.id AND t.status = 'completed') AS credits_spent
+      FROM users u
+      WHERE u.telegram_id NOT LIKE 'anon:%'
+      ORDER BY u.updated_at DESC
+      LIMIT ?
+    `).all(safeLimit);
+  }
+
   updateUserBalance(userId, balance) {
     this.db.prepare('UPDATE users SET balance = ?, updated_at = ? WHERE id = ?').run(balance, nowIso(), userId);
   }

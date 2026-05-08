@@ -153,6 +153,27 @@ function userTitle(user) {
   return user.first_name || user.telegram_id;
 }
 
+function formatUserForStats(user, index) {
+  const id = String(user.telegram_id || '').trim();
+  const username = String(user.username || '').trim();
+  const firstName = String(user.first_name || '').trim() || 'Без имени';
+  const nameLink = `<a href="tg://user?id=${escapeHtml(id)}">${escapeHtml(firstName)}</a>`;
+  const handle = username ? ` @${escapeHtml(username)}` : '';
+
+  const tags = [];
+  if (user.unlimited) tags.push('безлимит');
+  else tags.push(`${user.balance} кр.`);
+  if (user.blocked) tags.push('blocked');
+  if (Number(user.translations_done) > 0) {
+    tags.push(`${user.translations_done} перев.`);
+  }
+  if (!user.unlimited && Number(user.credits_spent) > 0) {
+    tags.push(`-${user.credits_spent} кр.`);
+  }
+
+  return `${index}. ${nameLink}${handle} · <code>${escapeHtml(id)}</code> · ${tags.join(' · ')}`;
+}
+
 function isAdmin(config, telegramId) {
   return config.telegram.admins.includes(String(telegramId));
 }
@@ -368,13 +389,31 @@ export class TelegramBot {
 
     if (command === '/stats') {
       const stats = this.store.stats();
-      return this.sendMessage(chatId, [
-        `Пользователей: ${stats.users}`,
+      const linkedCount = this.store.countLinkedUsers ? this.store.countLinkedUsers() : 0;
+      const userLimit = Math.max(1, Math.min(100, Number.parseInt(arg1, 10) || 30));
+      const linkedUsers = this.store.listLinkedUsers ? this.store.listLinkedUsers(userLimit) : [];
+
+      const lines = [
+        `Пользователей: ${stats.users} (${linkedCount} с Telegram)`,
         `Оплачено: ${stats.paid.count} платежей / ${Number(stats.paid.amount).toFixed(2)} ₽`,
         `Кэш: ${stats.cache.count} переводов / ${stats.cache.hits} попаданий`,
         'Задачи:',
         ...stats.jobs.map((row) => `${row.status}: ${row.count}`)
-      ].join('\n'));
+      ];
+
+      if (linkedUsers.length) {
+        lines.push('');
+        lines.push(`<b>Пользователи с Telegram</b> (последние ${linkedUsers.length}${linkedCount > linkedUsers.length ? ` из ${linkedCount}` : ''}):`);
+        linkedUsers.forEach((user, index) => {
+          lines.push(formatUserForStats(user, index + 1));
+        });
+        if (linkedCount > linkedUsers.length) {
+          lines.push('');
+          lines.push(`Показать больше: <code>/stats N</code> (до 100)`);
+        }
+      }
+
+      return this.sendMessage(chatId, lines.join('\n'));
     }
 
     if (command === '/grant') {
@@ -410,7 +449,7 @@ export class TelegramBot {
 
     return this.sendMessage(chatId, [
       'Админ-команды:',
-      '/stats',
+      '/stats [N] — статистика и список из N последних активных пользователей (1..100, по умолчанию 30)',
       '/grant TELEGRAM_ID CREDITS',
       '/unlimited TELEGRAM_ID on|off',
       '/block TELEGRAM_ID on|off',
