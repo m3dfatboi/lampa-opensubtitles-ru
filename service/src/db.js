@@ -57,6 +57,14 @@ export class Store {
         FOREIGN KEY(user_id) REFERENCES users(id)
       );
 
+      CREATE TABLE IF NOT EXISTS anonymous_usage (
+        device_key TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        translations_used INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS subtitle_cache (
         cache_key TEXT PRIMARY KEY,
         source_hash TEXT NOT NULL,
@@ -179,6 +187,96 @@ export class Store {
     if (trialCredits > 0) this.addLedger(result.lastInsertRowid, trialCredits, 'trial', 'user', String(result.lastInsertRowid));
 
     return this.getUserById(result.lastInsertRowid);
+  }
+
+  ensureAnonymousDevice(input) {
+    const deviceId = String(input.device_id || '').slice(0, 128);
+    if (!deviceId) throw new Error('ANONYMOUS_DEVICE_ID_REQUIRED');
+
+    const now = nowIso();
+    const key = sha256(deviceId);
+    const telegramId = `anon:${key}`;
+    let user = this.db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
+
+    if (!user) {
+      const result = this.db.prepare(`
+        INSERT INTO users (telegram_id, username, first_name, balance, unlimited, created_at, updated_at)
+        VALUES (?, ?, ?, 0, 1, ?, ?)
+      `).run(telegramId, '', 'Anonymous Lampa', now, now);
+      user = this.getUserById(result.lastInsertRowid);
+    }
+
+    const deviceRowId = `anon_${key.slice(0, 24)}`;
+    const tokenHash = sha256(`anon:${deviceId}`);
+    const existingDevice = this.db.prepare('SELECT * FROM devices WHERE id = ?').get(deviceRowId);
+
+    if (existingDevice) {
+      this.db.prepare(`
+        UPDATE devices
+        SET plugin_version = ?, platform = ?, target_language = ?, last_seen_at = ?
+        WHERE id = ?
+      `).run(input.plugin_version || '', input.platform || '', input.target_language || '', now, deviceRowId);
+    }
+    else {
+      this.db.prepare(`
+        INSERT INTO devices (id, user_id, device_id, token_hash, plugin_version, platform, target_language, created_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        deviceRowId,
+        user.id,
+        deviceId,
+        tokenHash,
+        input.plugin_version || '',
+        input.platform || '',
+        input.target_language || '',
+        now,
+        now
+      );
+    }
+
+    return {
+      device: this.db.prepare('SELECT * FROM devices WHERE id = ?').get(deviceRowId),
+      user: this.getUserById(user.id)
+    };
+  }
+
+  getAnonymousUsage(deviceId) {
+    const safeDeviceId = String(deviceId || '').slice(0, 128);
+    if (!safeDeviceId) return { used: 0 };
+
+    const row = this.db.prepare('SELECT translations_used AS used FROM anonymous_usage WHERE device_key = ?').get(sha256(safeDeviceId));
+    return row || { used: 0 };
+  }
+
+  consumeAnonymousTranslation(deviceId, limit) {
+    const safeDeviceId = String(deviceId || '').slice(0, 128);
+    if (!safeDeviceId) throw new Error('ANONYMOUS_DEVICE_ID_REQUIRED');
+
+    return this.tx(() => {
+      const now = nowIso();
+      const deviceKey = sha256(safeDeviceId);
+      const row = this.db.prepare('SELECT translations_used AS used FROM anonymous_usage WHERE device_key = ?').get(deviceKey);
+      const used = row ? row.used : 0;
+
+      if (used >= limit) throw new Error('ANONYMOUS_LIMIT_REACHED');
+
+      if (row) {
+        this.db.prepare('UPDATE anonymous_usage SET translations_used = ?, updated_at = ? WHERE device_key = ?')
+          .run(used + 1, now, deviceKey);
+      }
+      else {
+        this.db.prepare(`
+          INSERT INTO anonymous_usage (device_key, device_id, translations_used, created_at, updated_at)
+          VALUES (?, ?, 1, ?, ?)
+        `).run(deviceKey, safeDeviceId, now, now);
+      }
+
+      return {
+        used: used + 1,
+        limit,
+        remaining: Math.max(0, limit - used - 1)
+      };
+    });
   }
 
   getUserById(id) {

@@ -28,6 +28,15 @@ function jobResponse(job, user) {
   return base;
 }
 
+function freeTrialPayload(usage, limit) {
+  const used = usage?.used || 0;
+  return {
+    used,
+    limit,
+    remaining: Math.max(0, limit - used)
+  };
+}
+
 export class TranslationQueue {
   constructor(store, translator) {
     this.store = store;
@@ -210,8 +219,54 @@ export class LampaTranslateService {
     };
   }
 
+  tryAuthDevice(authorization) {
+    try {
+      return this.authDevice(authorization);
+    }
+    catch (error) {
+      if (error instanceof HttpError && error.status === 401) return null;
+      throw error;
+    }
+  }
+
+  authOrAnonymousDevice(authorization, input) {
+    const linked = this.tryAuthDevice(authorization);
+    if (linked) return { ...linked, anonymous: false };
+
+    const deviceId = String(input?.device_id || '').slice(0, 128);
+    if (!deviceId) throw new HttpError(401, 'missing device token');
+
+    const anonymous = this.store.ensureAnonymousDevice({
+      device_id: deviceId,
+      plugin_version: String(input?.plugin_version || '').slice(0, 64),
+      platform: String(input?.platform || '').slice(0, 32),
+      target_language: String(input?.target_language || '').slice(0, 16)
+    });
+
+    return { ...anonymous, anonymous: true };
+  }
+
+  getAccount(authorization, input = {}) {
+    const linked = this.tryAuthDevice(authorization);
+    if (linked) {
+      return {
+        linked: true,
+        balance: linked.user.balance,
+        unlimited: Boolean(linked.user.unlimited)
+      };
+    }
+
+    const limit = this.config.product.anonymousFreeTranslations;
+    const usage = this.store.getAnonymousUsage(input.device_id);
+
+    return {
+      linked: false,
+      free_trial: freeTrialPayload(usage, limit)
+    };
+  }
+
   startTranslation(authorization, input) {
-    const { device, user } = this.authDevice(authorization);
+    const { device, user, anonymous } = this.authOrAnonymousDevice(authorization, input);
     const targetLanguage = String(input.target_language || '').slice(0, 16) || 'rus';
     const sourceLanguage = String(input.source_language || '').slice(0, 16) || 'eng';
     const rawText = input.subtitle?.text || '';
@@ -228,12 +283,20 @@ export class LampaTranslateService {
         status: 'completed',
         credits_spent: 0,
         balance: user.balance,
+        anonymous,
+        free_trial: anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined,
         cues: cached.cues
       };
     }
 
     const existing = this.store.findActiveJobByUserCache(user.id, cacheKey);
-    if (existing) return jobResponse(existing, user);
+    if (existing) {
+      return {
+        ...jobResponse(existing, user),
+        anonymous,
+        free_trial: anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined
+      };
+    }
 
     if (this.store.countActiveJobs(user.id) >= this.config.product.maxActiveJobsPerUser) {
       throw new HttpError(429, 'у вас уже есть активный перевод');
@@ -254,6 +317,19 @@ export class LampaTranslateService {
       source_hash: subtitleHash(cues, rawText),
       credits_reserved: credits
     };
+    let freeTrial = null;
+
+    if (anonymous) {
+      try {
+        freeTrial = this.store.consumeAnonymousTranslation(input.device_id, this.config.product.anonymousFreeTranslations);
+      }
+      catch (error) {
+        if (error.message === 'ANONYMOUS_LIMIT_REACHED') {
+          throw new HttpError(402, 'бесплатные ИИ-переводы закончились. Подключите Telegram и пополните баланс.');
+        }
+        throw error;
+      }
+    }
 
     try {
       this.store.createTranslationJob(job, user);
@@ -271,15 +347,21 @@ export class LampaTranslateService {
       status: 'queued',
       job_id: job.id,
       reserved_credits: user.unlimited ? 0 : credits,
-      balance: freshUser.balance
+      balance: freshUser.balance,
+      anonymous,
+      free_trial: freeTrial || (anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined)
     };
   }
 
-  getTranslation(authorization, jobId) {
-    const { user } = this.authDevice(authorization);
+  getTranslation(authorization, jobId, input = {}) {
+    const { user, anonymous } = this.authOrAnonymousDevice(authorization, input);
     const job = this.store.getTranslationJobForUser(jobId, user.id);
     if (!job) throw new HttpError(404, 'job not found');
-    return jobResponse(job, this.store.getUserById(user.id));
+    return {
+      ...jobResponse(job, this.store.getUserById(user.id)),
+      anonymous,
+      free_trial: anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined
+    };
   }
 
   createPaymentForUser(telegramUser, packageId) {

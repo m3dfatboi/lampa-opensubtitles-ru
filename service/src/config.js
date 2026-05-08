@@ -107,6 +107,7 @@ export function createConfig(rootDir = process.cwd()) {
     },
     product: {
       trialCredits: intEnv('TRIAL_CREDITS', 3),
+      anonymousFreeTranslations: intEnv('ANONYMOUS_FREE_TRANSLATIONS', 3),
       creditChars: intEnv('CREDIT_CHARS', 10000),
       maxSubtitleChars: intEnv('MAX_SUBTITLE_CHARS', 250000),
       maxActiveJobsPerUser: intEnv('MAX_ACTIVE_JOBS_PER_USER', 1),

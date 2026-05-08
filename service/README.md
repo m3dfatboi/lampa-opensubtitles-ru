@@ -9,6 +9,7 @@
 - очередь переводов через OpenRouter;
 - кэш готовых переводов;
 - кэш успешно переведенных чанков для продолжения после частичной ошибки без повторной оплаты уже готовых кусков;
+- 3 бесплатных ИИ-перевода на устройство до привязки Telegram;
 - админский безлимит через `UNLIMITED_TELEGRAM_IDS`.
 
 ## Быстрый запуск
@@ -39,6 +40,7 @@ UNLIMITED_TELEGRAM_IDS=ваш_telegram_id
 OPENROUTER_API_KEY=...
 TRANSLATION_MODEL=google/gemini-2.5-flash
 TRANSLATION_FALLBACK_MODEL=google/gemini-2.5-pro
+ANONYMOUS_FREE_TRANSLATIONS=3
 ```
 
 Если VPS не может подключиться к `api.telegram.org`, можно форсировать рабочий IPv4:

@@ -32,6 +32,7 @@ function testConfig(tmp) {
     },
     product: {
       trialCredits: 3,
+      anonymousFreeTranslations: 3,
       creditChars: 10000,
       maxSubtitleChars: 250000,
       maxActiveJobsPerUser: 1,
@@ -193,6 +194,61 @@ test('translation reserves credits once and then returns cached result', async (
   assert.equal(cached.status, 'completed');
   assert.equal(cached.credits_spent, 0);
   assert.equal(cached.balance, 2);
+}));
+
+test('anonymous device gets three free translations before linking', async () => withStore(async ({ config, store }) => {
+  let translateCount = 0;
+  const service = new LampaTranslateService({
+    config,
+    store,
+    translator: {
+      cacheKey: ({ cues }) => `cache:${cues[0].text}`,
+      translate: async ({ cues }) => {
+        translateCount++;
+        return cues.map((cue) => ({ ...cue, text: `RU ${cue.text}` }));
+      }
+    },
+    robokassa: new Robokassa(config)
+  });
+
+  for (let index = 1; index <= 3; index++) {
+    const queued = service.startTranslation('', {
+      device_id: 'anon-device',
+      plugin_version: 'test',
+      platform: 'browser',
+      source_language: 'eng',
+      target_language: 'rus',
+      subtitle: {
+        cues: [{ start: 0, end: 1000, text: `Hello ${index}` }]
+      }
+    });
+
+    assert.equal(queued.status, 'queued');
+    assert.equal(queued.anonymous, true);
+    assert.equal(queued.free_trial.used, index);
+    assert.equal(queued.free_trial.limit, 3);
+
+    await sleep(30);
+    const completed = service.getTranslation('', queued.job_id, { device_id: 'anon-device' });
+    assert.equal(completed.status, 'completed');
+  }
+
+  assert.equal(translateCount, 3);
+
+  assert.throws(() => service.startTranslation('', {
+    device_id: 'anon-device',
+    plugin_version: 'test',
+    platform: 'browser',
+    source_language: 'eng',
+    target_language: 'rus',
+    subtitle: {
+      cues: [{ start: 0, end: 1000, text: 'Hello 4' }]
+    }
+  }), /бесплатные ИИ-переводы закончились/);
+
+  const account = service.getAccount('', { device_id: 'anon-device' });
+  assert.equal(account.linked, false);
+  assert.deepEqual(account.free_trial, { used: 3, limit: 3, remaining: 0 });
 }));
 
 test('translator accepts local chunk ids returned by model', async () => {

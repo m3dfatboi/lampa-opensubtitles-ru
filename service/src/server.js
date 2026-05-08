@@ -80,6 +80,11 @@ export function createServer(service, bot, config) {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/v1/account') {
+        jsonResponse(res, 200, service.getAccount(req.headers.authorization, queryParams(url)), CORS);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/v1/devices/session') {
         const body = await readBody(req);
         jsonResponse(res, 200, service.createDeviceSession(body), CORS);
@@ -100,7 +105,7 @@ export function createServer(service, bot, config) {
 
       const translationParams = routeMatch(url.pathname, '/v1/translations/:id');
       if (req.method === 'GET' && translationParams) {
-        jsonResponse(res, 200, service.getTranslation(req.headers.authorization, translationParams.id), CORS);
+        jsonResponse(res, 200, service.getTranslation(req.headers.authorization, translationParams.id, queryParams(url)), CORS);
         return;
       }
 

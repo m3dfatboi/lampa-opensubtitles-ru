@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v10-service-production-endpoint';
+    var PLUGIN_VERSION = 'v11-ai-subtitles-ux';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -286,26 +286,31 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
-                name: PLUGIN_ID + '_translate_enabled',
-                type: 'trigger',
-                default: true
-            },
-            field: {
-                name: 'Автоперевод по кредитам'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_ID,
-            param: {
-                name: PLUGIN_ID + '_connect',
+                name: PLUGIN_ID + '_ai_enable',
                 type: 'button'
             },
             field: {
-                name: 'Подключить Telegram'
+                name: 'Включить ИИ перевод субтитров',
+                description: accountStatusText()
+            },
+            onRender: function (item) {
+                updateAccountSettingsText(item);
+                refreshAccountState(function () {
+                    updateAccountSettingsText(item);
+                });
             },
             onChange: function () {
-                showServiceConnectModal();
+                Lampa.Storage.set(PLUGIN_ID + '_translate_enabled', true);
+                refreshAccountState(function (account) {
+                    if (account && account.linked) {
+                        notify('ИИ перевод включен. ' + accountStatusText());
+                    }
+                    else {
+                        showServiceConnectModal();
+                    }
+                }, function () {
+                    showServiceConnectModal();
+                });
             }
         });
 
@@ -363,6 +368,68 @@
 
     function saveDeviceToken(token) {
         if (token) Lampa.Storage.set(PLUGIN_ID + '_device_token', token);
+    }
+
+    function clearDeviceToken() {
+        Lampa.Storage.set(PLUGIN_ID + '_device_token', '');
+    }
+
+    function accountStatusText() {
+        var linked = storageBool(PLUGIN_ID + '_account_linked', false);
+        var unlimited = storageBool(PLUGIN_ID + '_account_unlimited', false);
+        var balance = storage(PLUGIN_ID + '_account_balance', '');
+        var freeUsed = parseInt(storage(PLUGIN_ID + '_free_used', '0'), 10) || 0;
+        var freeLimit = parseInt(storage(PLUGIN_ID + '_free_limit', '3'), 10) || 3;
+        var freeLeft = Math.max(0, freeLimit - freeUsed);
+
+        if (linked && unlimited) return 'Баланс: безлимит';
+        if (linked && balance !== '') return 'Баланс: ' + balance + ' кредитов';
+
+        return 'Без привязки: доступно ' + freeLeft + ' из ' + freeLimit + ' бесплатных ИИ-переводов';
+    }
+
+    function saveAccountState(account) {
+        if (!account) return;
+
+        Lampa.Storage.set(PLUGIN_ID + '_account_linked', account.linked ? 'true' : 'false');
+
+        if (account.linked) {
+            Lampa.Storage.set(PLUGIN_ID + '_account_unlimited', account.unlimited ? 'true' : 'false');
+            if (typeof account.balance !== 'undefined') Lampa.Storage.set(PLUGIN_ID + '_account_balance', String(account.balance));
+        }
+
+        if (account.free_trial) {
+            Lampa.Storage.set(PLUGIN_ID + '_free_used', String(account.free_trial.used || 0));
+            Lampa.Storage.set(PLUGIN_ID + '_free_limit', String(account.free_trial.limit || 3));
+        }
+    }
+
+    function updateAccountSettingsText(item) {
+        if (!item || !item.find) return;
+
+        try {
+            var description = item.find('.settings-param__descr, .settings-param__description, .settings-param__info, .settings--descr').first();
+            var text = accountStatusText();
+
+            if (description.length) description.text(text);
+            else item.append('<div class="settings-param__descr opensub-account-state">' + escapeHtml(text) + '</div>');
+        }
+        catch (e) {}
+    }
+
+    function refreshAccountState(done, fail) {
+        serviceRequest('/v1/account?device_id=' + encodeURIComponent(deviceId()), false, function (account) {
+            saveAccountState(account);
+            if (done) done(account);
+        }, function (xhr) {
+            if (xhr && xhr.status === 401) {
+                clearDeviceToken();
+                Lampa.Storage.set(PLUGIN_ID + '_account_linked', 'false');
+            }
+            if (fail) fail(xhr);
+        }, {
+            timeout: 15000
+        });
     }
 
     function deviceId() {
@@ -1444,7 +1511,7 @@
     function createTranslatedSubtitleItem(item, index) {
         var sourceName = languageName(item.sourceLang);
         var target = selectedLanguage();
-        var title = item.native ? 'Автоперевод встроенных с ' + sourceName : 'Автоперевод с ' + sourceName;
+        var title = item.native ? 'ИИ перевод встроенных с ' + sourceName : 'ИИ перевод с ' + sourceName;
         var sub = {
             stremio: true,
             translated: true,
@@ -1452,7 +1519,7 @@
             source: item.source || 'stremio-opensubtitles-translated',
             index: index,
             language: target.code,
-            label: PLUGIN_TITLE + ' AI',
+            label: 'ИИ перевод',
             title: title,
             url: item.url,
             sourceKey: item.sourceKey,
@@ -1863,6 +1930,11 @@
         return base + joiner + 'start=' + encodeURIComponent(code || '');
     }
 
+    function telegramBotName() {
+        var match = telegramBotUrl().match(/t\.me\/([^/?#]+)/i);
+        return match ? '@' + match[1] : 'Telegram-бот';
+    }
+
     function showServiceConnectModal(onLinked) {
         var base = serviceBaseUrl();
         var prevController = captureController();
@@ -1882,7 +1954,9 @@
         }, function (session) {
             var code = session && (session.code || session.link_code);
             var sessionId = session && (session.session_id || session.id);
-            var link = session && session.bot_url || serviceBotLink(code);
+            var qrLink = session && session.bot_url || serviceBotLink(code);
+            var visibleLink = telegramBotUrl() || qrLink;
+            var botName = telegramBotName();
             var html;
             var timer = 0;
             var started = Date.now();
@@ -1895,35 +1969,25 @@
             html = $('<div class="account-modal-split opensub-service-connect">' +
                 '<div class="account-modal-split__qr">' +
                     '<div class="account-modal-split__qr-code"></div>' +
-                    '<div class="account-modal-split__qr-text">Сканируйте QR-код телефоном</div>' +
+                    '<div class="account-modal-split__qr-text">Сканируйте QR-код: код привязки уже внутри</div>' +
                 '</div>' +
                 '<div class="account-modal-split__info">' +
-                    '<div class="account-modal-split__title">Подключите Telegram</div>' +
+                    '<div class="account-modal-split__title">ИИ перевод субтитров</div>' +
                     '<div class="account-modal-split__text">' +
-                        '<p>Откройте бота и отправьте код:</p>' +
                         '<div style="font-size:2.2em;font-weight:700;letter-spacing:.12em;margin:.6em 0">' + escapeHtml(code) + '</div>' +
-                        '<p style="word-break:break-all">' + escapeHtml(link) + '</p>' +
-                        '<div class="simple-button selector opensub-service-copy">Скопировать ссылку</div>' +
+                        '<p>Бот ' + escapeHtml(botName) + ' привязывает Lampa к вашему балансу, показывает кредиты и помогает купить переводы после бесплатного лимита.</p>' +
+                        '<p>Без привязки доступны 3 бесплатных ИИ-перевода на этом устройстве. После привязки переводы списываются с баланса кредитов.</p>' +
+                        '<p>Откройте бота и отправьте код выше или просто отсканируйте QR-код.</p>' +
+                        '<p style="word-break:break-all">' + escapeHtml(visibleLink) + '</p>' +
                     '</div>' +
                 '</div>' +
             '</div>');
 
             if (Lampa.Utils && Lampa.Utils.qrcode) {
-                Lampa.Utils.qrcode(link, html.find('.account-modal-split__qr-code'), function () {
+                Lampa.Utils.qrcode(qrLink, html.find('.account-modal-split__qr-code'), function () {
                     html.find('.account-modal-split__qr-code').text(code);
                 });
             }
-
-            html.find('.opensub-service-copy').on('hover:enter', function () {
-                if (Lampa.Utils && Lampa.Utils.copyTextToClipboard) {
-                    Lampa.Utils.copyTextToClipboard(link, function () {
-                        notify('Ссылка скопирована');
-                    }, function () {
-                        notify(link);
-                    });
-                }
-                else notify(link);
-            });
 
             function closeModal() {
                 clearInterval(timer);
@@ -1940,12 +2004,17 @@
 
                 serviceRequest('/v1/devices/session/' + encodeURIComponent(sessionId), false, function (status) {
                     var token = status && (status.device_token || status.token);
-                    var balance = status && (status.balance || status.credits);
+                    var balance = status && (typeof status.balance !== 'undefined' ? status.balance : status.credits);
 
                     if (status && (status.status === 'linked' || token)) {
                         saveDeviceToken(token);
+                        saveAccountState({
+                            linked: true,
+                            balance: balance,
+                            unlimited: status.unlimited
+                        });
                         clearInterval(timer);
-                        notify('Telegram подключен' + (typeof balance !== 'undefined' ? '. Баланс: ' + balance + ' кредитов' : ''));
+                        notify('Telegram подключен' + (status.unlimited ? '. Баланс: безлимит' : (typeof balance !== 'undefined' ? '. Баланс: ' + balance + ' кредитов' : '')));
                         closeModal();
                         if (onLinked) onLinked(status);
                     }
@@ -1968,7 +2037,7 @@
                     onBack: closeModal
                 });
             }
-            else notify('Откройте Telegram: ' + link);
+            else notify('Откройте Telegram: ' + visibleLink + ' и отправьте код ' + code);
 
             timer = setInterval(checkSession, SERVICE_POLL_INTERVAL);
             checkSession();
@@ -2025,6 +2094,41 @@
         }).filter(function (cue) {
             return cue.end > cue.start && cue.text;
         });
+    }
+
+    function saveTranslationAccountState(result) {
+        if (!result) return;
+
+        saveAccountState({
+            linked: !result.anonymous && (typeof result.balance !== 'undefined' || result.unlimited),
+            balance: result.balance,
+            unlimited: result.unlimited,
+            free_trial: result.free_trial
+        });
+    }
+
+    function announceFreeTranslation(result) {
+        if (!result || !result.anonymous || !result.free_trial || !result.free_trial.used) return;
+
+        notify(result.free_trial.used + ' из ' + result.free_trial.limit + ' бесплатных переводов активировано');
+    }
+
+    function isServiceAuthError(xhr) {
+        var message = xhr && xhr.message ? xhr.message : decodeError(xhr);
+        var status = xhr && xhr.status;
+
+        return status === 401 ||
+            status === 402 ||
+            /device token|кредит|бесплатн|привяж|telegram/i.test(message || '');
+    }
+
+    function handleServiceAccessError(xhr, retry) {
+        if (!isServiceAuthError(xhr)) return false;
+
+        if (xhr && xhr.status === 401) clearDeviceToken();
+
+        showServiceConnectModal(retry);
+        return true;
     }
 
     function resolvePendingTranslation(cacheKey, cues, result) {
@@ -2097,9 +2201,13 @@
             progress: progress ? [progress] : []
         };
 
-        serviceRequest('/v1/translations', body, function (result) {
+        function submit(skipToken) {
+            serviceRequest('/v1/translations', body, function (result) {
             var jobId = result && (result.job_id || result.id);
             var translatedCues;
+
+            saveTranslationAccountState(result);
+            announceFreeTranslation(result);
 
             if (result && (result.status === 'completed' || result.cues || result.subtitle_text || result.translation)) {
                 translatedCues = serviceCues(result);
@@ -2120,6 +2228,8 @@
             pollServiceTranslation(jobId, function (state) {
                 emitPendingProgress(cacheKey, state);
             }, function (translatedCues, pollResult) {
+                saveTranslationAccountState(pollResult);
+
                 if (!translatedCues.length) {
                     rejectPendingTranslation(cacheKey, { message: 'сервер вернул пустой перевод' });
                     return;
@@ -2130,10 +2240,20 @@
                 rejectPendingTranslation(cacheKey, xhr);
             });
         }, function (xhr) {
+            if (!skipToken && xhr && xhr.status === 401) {
+                clearDeviceToken();
+                submit(true);
+                return;
+            }
+
             rejectPendingTranslation(cacheKey, xhr);
         }, {
-            timeout: 60000
+            timeout: 60000,
+            token: skipToken ? false : undefined
         });
+        }
+
+        submit(false);
     }
 
     function pollServiceTranslation(jobId, progress, done, fail) {
@@ -2145,7 +2265,7 @@
                 return;
             }
 
-            serviceRequest('/v1/translations/' + encodeURIComponent(jobId), false, function (result) {
+            serviceRequest('/v1/translations/' + encodeURIComponent(jobId) + '?device_id=' + encodeURIComponent(deviceId()), false, function (result) {
                 var status = result && result.status;
                 var message = result && (result.message || result.error);
 
@@ -2273,13 +2393,6 @@
 
             logDebug('renderer.selectTranslated', item && item.url, item && item.sourceLang, '→', targetLang);
 
-            if (!deviceToken()) {
-                showServiceConnectModal(function () {
-                    renderer.selectTranslated(item);
-                });
-                return;
-            }
-
             if (cached) {
                 self.disable(false);
                 self.current = item;
@@ -2334,6 +2447,12 @@
 
                     hideTranslationStatus();
                     logDebug('renderer.selectTranslated pending error', xhr && (xhr.status || xhr.message));
+                    if (handleServiceAccessError(xhr, function () {
+                        renderer.selectTranslated(item);
+                    })) {
+                        self.loading = false;
+                        return;
+                    }
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
                     self.disable();
                 });
@@ -2384,6 +2503,12 @@
 
                     hideTranslationStatus();
                     logDebug('renderer.selectTranslated error', xhr && (xhr.status || xhr.message));
+                    if (handleServiceAccessError(xhr, function () {
+                        renderer.selectTranslated(item);
+                    })) {
+                        self.loading = false;
+                        return;
+                    }
                     notify(PLUGIN_TITLE + ': ' + (xhr && xhr.message ? xhr.message : decodeError(xhr)));
                     self.disable();
                 });
