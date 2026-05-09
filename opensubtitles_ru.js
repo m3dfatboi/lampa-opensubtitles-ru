@@ -82,9 +82,6 @@
     var subtitleSourceCache = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
-    var rendererTimingTrack = null;
-
-    var RENDERER_TRACK_LABEL = '__opensubtitles_ru_timing__';
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -378,6 +375,26 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_ID,
             param: {
+                name: PLUGIN_ID + '_clear_cache',
+                type: 'button'
+            },
+            field: {
+                name: 'Очистить кеш переводов',
+                description: translationCacheStatusText()
+            },
+            onRender: function (item) {
+                updateCacheStatusText(item);
+            },
+            onChange: function () {
+                var removed = clearTranslationCache();
+                notify(removed ? 'Удалено переводов: ' + removed : 'Кеш и так пуст');
+                refreshAllCacheStatusTexts();
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: {
                 name: PLUGIN_ID + '_debug',
                 type: 'trigger',
                 default: false
@@ -386,6 +403,39 @@
                 name: 'Показывать ошибки поиска'
             }
         });
+    }
+
+    var cacheStatusElements = [];
+
+    function updateCacheStatusText(item) {
+        if (!item || !item.find) return;
+        try {
+            var description = item.find('.settings-param__descr, .settings-param__description, .settings-param__info, .settings--descr').first();
+            var text = translationCacheStatusText();
+
+            if (description.length) {
+                description.text(text);
+                if (cacheStatusElements.indexOf(description[0]) === -1) cacheStatusElements.push(description[0]);
+            }
+            else {
+                item.append('<div class="settings-param__descr opensub-cache-state">' + escapeHtml(text) + '</div>');
+            }
+        }
+        catch (e) {}
+    }
+
+    function refreshAllCacheStatusTexts() {
+        var text = translationCacheStatusText();
+        for (var i = cacheStatusElements.length - 1; i >= 0; i--) {
+            try {
+                if (!cacheStatusElements[i] || !cacheStatusElements[i].isConnected) {
+                    cacheStatusElements.splice(i, 1);
+                    continue;
+                }
+                cacheStatusElements[i].textContent = text;
+            }
+            catch (e) {}
+        }
     }
 
     function decodeError(xhr) {
@@ -1143,7 +1193,7 @@
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
             var track = tracks[i];
-            if (!track || track.label === RENDERER_TRACK_LABEL || track === rendererTimingTrack) continue;
+            if (!track) continue;
             try {
                 if (track.mode === 'showing') track.mode = 'disabled';
             }
@@ -1156,7 +1206,6 @@
             for (var j = 0; j < list.length; j++) {
                 var item = list[j];
                 if (!item || isOurSub(item)) continue;
-                if (item.label === RENDERER_TRACK_LABEL || item === rendererTimingTrack) continue;
                 try {
                     if (item.mode === 'showing') item.mode = 'disabled';
                 }
@@ -1167,84 +1216,6 @@
                 catch (e) {}
             }
         }
-    }
-
-    function ensureRendererTimingTrack() {
-        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-        if (!video || typeof video.addTextTrack !== 'function') return null;
-
-        if (rendererTimingTrack) {
-            try {
-                if (video.textTracks) {
-                    var found = false;
-                    for (var i = 0; i < video.textTracks.length; i++) {
-                        if (video.textTracks[i] === rendererTimingTrack) { found = true; break; }
-                    }
-                    if (!found) rendererTimingTrack = null;
-                }
-            }
-            catch (e) { rendererTimingTrack = null; }
-        }
-
-        if (!rendererTimingTrack) {
-            try {
-                rendererTimingTrack = video.addTextTrack('metadata', RENDERER_TRACK_LABEL, '');
-            }
-            catch (e) {
-                rendererTimingTrack = null;
-            }
-        }
-
-        return rendererTimingTrack;
-    }
-
-    function clearRendererTimingTrack() {
-        if (!rendererTimingTrack) return;
-        try { rendererTimingTrack.oncuechange = null; }
-        catch (e) {}
-        try {
-            while (rendererTimingTrack.cues && rendererTimingTrack.cues.length) {
-                rendererTimingTrack.removeCue(rendererTimingTrack.cues[0]);
-            }
-        }
-        catch (e) {}
-        try { rendererTimingTrack.mode = 'disabled'; }
-        catch (e) {}
-    }
-
-    function applyCuesToTimingTrack(cues, shiftSec, onCueChange) {
-        var track = ensureRendererTimingTrack();
-        if (!track) return null;
-
-        var Ctor = window.VTTCue || window.TextTrackCue;
-        if (typeof Ctor !== 'function') return null;
-
-        try { track.oncuechange = null; }
-        catch (e) {}
-
-        try {
-            while (track.cues && track.cues.length) track.removeCue(track.cues[0]);
-        }
-        catch (e) {}
-
-        var shift = Number(shiftSec) || 0;
-        for (var i = 0; i < (cues || []).length; i++) {
-            var startSec = (cues[i].start / 1000) + shift;
-            var endSec = (cues[i].end / 1000) + shift;
-            if (!(endSec > startSec)) continue;
-            try {
-                track.addCue(new Ctor(Math.max(0, startSec), Math.max(startSec + 0.001, endSec), cues[i].text || ''));
-            }
-            catch (e) {}
-        }
-
-        try { track.mode = 'hidden'; }
-        catch (e) {}
-
-        try { track.oncuechange = onCueChange; }
-        catch (e) {}
-
-        return track;
     }
 
     function nativeMediaKey() {
@@ -2194,6 +2165,91 @@
         });
     }
 
+    var TRANSLATION_CACHE_PREFIX = PLUGIN_ID + '_tr_cache:';
+
+    function cacheStorageKey(key) {
+        return TRANSLATION_CACHE_PREFIX + key;
+    }
+
+    function listTranslationCacheKeys() {
+        var keys = [];
+        try {
+            if (!window.localStorage) return keys;
+            for (var i = 0; i < window.localStorage.length; i++) {
+                var k = window.localStorage.key(i);
+                if (k && k.indexOf(TRANSLATION_CACHE_PREFIX) === 0) keys.push(k);
+            }
+        }
+        catch (e) {}
+        return keys;
+    }
+
+    function loadTranslationCacheFromStorage() {
+        var keys = listTranslationCacheKeys();
+        var loaded = 0;
+        for (var i = 0; i < keys.length; i++) {
+            try {
+                var raw = window.localStorage.getItem(keys[i]);
+                if (!raw) continue;
+                var cues = JSON.parse(raw);
+                if (Array.isArray(cues) && cues.length) {
+                    translationMemory[keys[i].slice(TRANSLATION_CACHE_PREFIX.length)] = cues;
+                    loaded++;
+                }
+            }
+            catch (e) {}
+        }
+        if (loaded) logDebug('translation cache: loaded', loaded, 'entries from storage');
+    }
+
+    function persistTranslation(key, cues) {
+        if (!key || !cues || !cues.length) return;
+        try {
+            if (!window.localStorage) return;
+            window.localStorage.setItem(cacheStorageKey(key), JSON.stringify(cues));
+        }
+        catch (e) {
+            logDebug('persistTranslation failed', e && e.message);
+        }
+    }
+
+    function translationCacheStats() {
+        var keys = listTranslationCacheKeys();
+        var bytes = 0;
+        for (var i = 0; i < keys.length; i++) {
+            try {
+                var v = window.localStorage.getItem(keys[i]);
+                if (v) bytes += v.length;
+            }
+            catch (e) {}
+        }
+        return { count: keys.length, bytes: bytes };
+    }
+
+    function formatCacheSize(bytes) {
+        if (!bytes) return '0 КБ';
+        if (bytes < 1024) return bytes + ' Б';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+        return (bytes / 1024 / 1024).toFixed(2) + ' МБ';
+    }
+
+    function translationCacheStatusText() {
+        var stats = translationCacheStats();
+        if (!stats.count) return 'Кеш пуст';
+        return stats.count + ' переводов · ' + formatCacheSize(stats.bytes);
+    }
+
+    function clearTranslationCache() {
+        var keys = listTranslationCacheKeys();
+        for (var i = 0; i < keys.length; i++) {
+            try { window.localStorage.removeItem(keys[i]); }
+            catch (e) {}
+        }
+        translationMemory = {};
+        logDebug('translation cache: cleared', keys.length, 'entries');
+        return keys.length;
+    }
+
     function cachedTranslation(key) {
         if (translationMemory[key] && translationMemory[key].length) return cloneCues(translationMemory[key]);
         return null;
@@ -2201,6 +2257,9 @@
 
     function rememberTranslation(key, cues) {
         translationMemory[key] = cloneCues(cues);
+        persistTranslation(key, translationMemory[key]);
+        try { refreshAllCacheStatusTexts(); }
+        catch (e) {}
     }
 
     function isAccountUnlimited() {
@@ -3022,7 +3081,7 @@
         start: function () {
             var self = this;
 
-            logDebug('renderer.start: timer fires every 100ms, cuechange in parallel');
+            logDebug('renderer.start: timer fires every 50ms');
 
             try { installToPanel(); }
             catch (e) { logDebug('renderer.start install panel error', e && e.message); }
@@ -3033,30 +3092,12 @@
 
             silenceNativeTextTracks();
 
-            self.lastShift = currentSubtitleShift();
-            applyCuesToTimingTrack(self.cues, self.lastShift, function () {
-                self.emitFromTimingTrack();
-            });
-
             clearInterval(self.timer);
             self.timer = setInterval(function () {
                 self.update();
-            }, 100);
+            }, 50);
 
             self.update();
-        },
-        emitFromTimingTrack: function () {
-            if (!this.current || !rendererTimingTrack) return;
-            var active = rendererTimingTrack.activeCues;
-            var text = '';
-            if (active && active.length) {
-                for (var i = 0; i < active.length; i++) {
-                    text += (text ? '\n' : '') + (active[i].text || '');
-                }
-            }
-            if (this.lastText === text) return;
-            this.lastText = text;
-            showSubtitleText(text);
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
@@ -3067,14 +3108,6 @@
             if (!this.current || !this.cues.length) return;
 
             silenceNativeTextTracks();
-
-            if (shift !== this.lastShift) {
-                this.lastShift = shift;
-                var self = this;
-                applyCuesToTimingTrack(this.cues, shift, function () {
-                    self.emitFromTimingTrack();
-                });
-            }
 
             for (var i = 0; i < this.cues.length; i++) {
                 if (time >= this.cues[i].start && time <= this.cues[i].end) {
@@ -3100,12 +3133,10 @@
             subtitleNetwork.clear();
             serviceNetwork.clear();
             hideTranslationStatus();
-            clearRendererTimingTrack();
 
             this.timer = 0;
             this.cues = [];
             this.loading = false;
-            this.lastShift = 0;
 
             if (this.current) this.current.selected = false;
             this.current = null;
@@ -3290,6 +3321,7 @@
         Lampa.Listener._opensub_full_listener = fullListener;
     }
 
+    loadTranslationCacheFromStorage();
     addSettings();
     hookPanelSetSubs();
     hookSubsviewSignal();
