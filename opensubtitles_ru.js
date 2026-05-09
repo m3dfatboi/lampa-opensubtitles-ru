@@ -1899,6 +1899,77 @@
         logDebug('hookSubsviewSignal: installed');
     }
 
+    function currentSubtitleShift() {
+        return parseFloat(storage('player_subs_shift_time', '0')) || 0;
+    }
+
+    function formatShiftLabel(sec) {
+        if (!sec) return '0 sec.';
+        var sign = sec > 0 ? '+' : '−';
+        var abs = Math.abs(sec);
+        var fixed = abs % 1 === 0 ? String(abs) : abs.toFixed(1);
+        return sign + fixed + ' sec.';
+    }
+
+    function buildSubtitleDelaySteps() {
+        var steps = [-120, -90, -60, -30, -15];
+        for (var i = -20; i <= 20; i++) steps.push(Math.round(i * 5) / 10);
+        var positiveWide = [15, 30, 60, 90, 120];
+        for (var j = 0; j < positiveWide.length; j++) steps.push(positiveWide[j]);
+        return steps;
+    }
+
+    function looksLikeLampaSubtitleDelayMenu(params) {
+        if (!params || !Array.isArray(params.items) || params.items.length < 5) return false;
+
+        var values = [];
+        for (var i = 0; i < params.items.length; i++) {
+            var raw = params.items[i] && params.items[i].value;
+            if (typeof raw !== 'number') return false;
+            values.push(raw);
+        }
+
+        if (values[0] !== -120 || values[values.length - 1] !== 120) return false;
+        if (values.indexOf(0) === -1) return false;
+
+        return true;
+    }
+
+    function patchSubtitleDelayMenu(params) {
+        if (!looksLikeLampaSubtitleDelayMenu(params)) return params;
+
+        var current = currentSubtitleShift();
+        params.items = buildSubtitleDelaySteps().map(function (sec) {
+            return {
+                title: formatShiftLabel(sec),
+                value: sec,
+                selected: Math.abs(sec - current) < 0.01
+            };
+        });
+
+        logDebug('hookSubtitleDelayPicker: replaced ' + params.items.length + ' delay options, current=' + current);
+        return params;
+    }
+
+    function hookSubtitleDelayPicker() {
+        if (!Lampa.Select || typeof Lampa.Select.show !== 'function') return;
+        if (Lampa.Select.show._opensub_delay_hook === PLUGIN_VERSION) return;
+
+        var original = Lampa.Select.show._opensub_delay_original || Lampa.Select.show;
+
+        var wrapper = function (params) {
+            try { params = patchSubtitleDelayMenu(params); }
+            catch (e) { logDebug('hookSubtitleDelayPicker error', e && e.message); }
+            return original.call(this, params);
+        };
+
+        wrapper._opensub_delay_hook = PLUGIN_VERSION;
+        wrapper._opensub_delay_original = original;
+        Lampa.Select.show = wrapper;
+
+        logDebug('hookSubtitleDelayPicker: installed');
+    }
+
     function hookAndroidOpenPlayer() {
         if (!Lampa.Android || typeof Lampa.Android.openPlayer !== 'function') {
             logDebug('hookAndroidOpenPlayer: Lampa.Android.openPlayer not available');
@@ -2962,7 +3033,7 @@
 
             silenceNativeTextTracks();
 
-            self.lastShift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
+            self.lastShift = currentSubtitleShift();
             applyCuesToTimingTrack(self.cues, self.lastShift, function () {
                 self.emitFromTimingTrack();
             });
@@ -2989,7 +3060,7 @@
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-            var shift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
+            var shift = currentSubtitleShift();
             var time = video && typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
             var text = '';
 
@@ -3224,12 +3295,14 @@
     hookSubsviewSignal();
     hookVideoSubsview();
     hookAndroidOpenPlayer();
+    hookSubtitleDelayPicker();
 
     Lampa.Player.listener.follow('ready', function (data) {
         hookPanelSetSubs();
         hookSubsviewSignal();
         hookVideoSubsview();
         hookAndroidOpenPlayer();
+        hookSubtitleDelayPicker();
         startPlayer(data);
     });
     Lampa.Player.listener.follow('destroy', destroyPlayer);
