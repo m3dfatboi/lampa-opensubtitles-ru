@@ -1688,13 +1688,14 @@
     }
 
     function createSubtitleItem(item, index) {
+        var label = PLUGIN_TITLE + subtitleItemTitleSuffix(item);
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
             language: item.lang || selectedLanguage().code,
-            label: PLUGIN_TITLE,
-            title: PLUGIN_TITLE + subtitleItemTitleSuffix(item),
+            label: label,
+            title: label,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
@@ -1749,6 +1750,7 @@
         var sourceName = languageName(item.sourceLang);
         var target = selectedLanguage();
         var baseTitle = item.native ? 'ИИ перевод встроенных с ' + sourceName : 'ИИ перевод с ' + sourceName;
+        var label = baseTitle + translatedItemTitleSuffix(item);
         var sub = {
             stremio: true,
             translated: true,
@@ -1756,8 +1758,8 @@
             source: item.source || 'stremio-opensubtitles-translated',
             index: index,
             language: target.code,
-            label: 'ИИ перевод',
-            title: baseTitle + translatedItemTitleSuffix(item),
+            label: label,
+            title: label,
             url: item.url,
             sourceKey: item.sourceKey,
             sourceUrl: item.sourceUrl || (item.native ? '' : item.url),
