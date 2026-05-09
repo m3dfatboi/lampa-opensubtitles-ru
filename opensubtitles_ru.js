@@ -1535,86 +1535,6 @@
         return item;
     }
 
-    function currentSubtitleShift() {
-        return parseFloat(storage('player_subs_shift_time', '0')) || 0;
-    }
-
-    function formatShiftLabel(sec) {
-        if (!sec) return '0 с';
-        var sign = sec > 0 ? '+' : '−';
-        var abs = Math.abs(sec);
-        var fixed = abs % 1 === 0 ? String(abs) : abs.toFixed(1);
-        return sign + fixed + ' с';
-    }
-
-    function buildShiftSteps() {
-        var steps = [];
-        for (var i = -20; i <= 20; i++) {
-            steps.push(Math.round(i * 5) / 10);
-        }
-        return steps;
-    }
-
-    function promptShiftDelay() {
-        if (!Lampa.Select || !Lampa.Select.show) return;
-
-        var current = currentSubtitleShift();
-        var items = buildShiftSteps().map(function (sec) {
-            return {
-                title: formatShiftLabel(sec),
-                value: sec,
-                selected: Math.abs(sec - current) < 0.01
-            };
-        });
-
-        Lampa.Select.show({
-            title: 'Задержка субтитров (текущая: ' + formatShiftLabel(current) + ')',
-            items: items,
-            nohide: true,
-            onBack: function () {},
-            onSelect: function (chosen) {
-                try { Lampa.Storage.set('player_subs_shift_time', chosen.value); }
-                catch (e) {}
-                logDebug('subtitle shift set to', chosen.value, 'sec');
-            }
-        });
-    }
-
-    function shiftItem() {
-        var item = {
-            title: 'Задержка субтитров: ' + formatShiftLabel(currentSubtitleShift()),
-            index: -1,
-            stremio: true,
-            source: 'stremio-opensubtitles',
-            isPicker: true,
-            onSelect: function () {
-                if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
-                    Lampa.PlayerVideo.subsview(true);
-                }
-                promptShiftDelay();
-            }
-        };
-
-        Object.defineProperty(item, 'selected', {
-            configurable: true,
-            get: function () { return false; },
-            set: function () {}
-        });
-
-        Object.defineProperty(item, 'mode', {
-            configurable: true,
-            set: function (value) {
-                if (value === 'showing') {
-                    actionWasPicked = true;
-                    setTimeout(function () { actionWasPicked = false; }, 200);
-                }
-            },
-            get: function () { return 'disabled'; }
-        });
-
-        return item;
-    }
-
     function rangeItems(count, current) {
         var items = [];
         for (var i = 1; i <= count; i++) {
@@ -2081,11 +2001,10 @@
             if (status) mixed.push(status);
         }
 
-        mixed.push(separatorItem(PLUGIN_TITLE));
         if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
+            mixed.push(separatorItem(PLUGIN_TITLE));
             mixed.push(searchItem());
         }
-        mixed.push(shiftItem());
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' nativeTranslated=' + nativeTranslated.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
@@ -3043,7 +2962,7 @@
 
             silenceNativeTextTracks();
 
-            self.lastShift = currentSubtitleShift();
+            self.lastShift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
             applyCuesToTimingTrack(self.cues, self.lastShift, function () {
                 self.emitFromTimingTrack();
             });
@@ -3070,7 +2989,7 @@
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-            var shift = currentSubtitleShift();
+            var shift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
             var time = video && typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
             var text = '';
 
