@@ -1189,6 +1189,53 @@
         return tracks && tracks.length ? Array.prototype.slice.call(tracks) : [];
     }
 
+    var FRAMERATE_RATIOS = [
+        23.976 / 24,
+        24 / 23.976,
+        23.976 / 25,
+        25 / 23.976,
+        24 / 25,
+        25 / 24,
+        29.97 / 25,
+        25 / 29.97,
+        29.97 / 24,
+        24 / 29.97,
+        30 / 29.97,
+        29.97 / 30
+    ];
+
+    function detectFramerateRatio(cues) {
+        if (!cues || !cues.length) return 1;
+
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+        var duration = video && video.duration;
+        if (!duration || !isFinite(duration) || duration < 60) return 1;
+
+        var lastEndSec = cues[cues.length - 1].end / 1000;
+        if (lastEndSec < duration * 0.7) return 1;
+        if (lastEndSec > duration * 1.05) return 1;
+
+        var ratio = duration / lastEndSec;
+        var tolerance = 0.005;
+
+        for (var i = 0; i < FRAMERATE_RATIOS.length; i++) {
+            if (Math.abs(ratio - FRAMERATE_RATIOS[i]) < tolerance) return FRAMERATE_RATIOS[i];
+        }
+
+        return 1;
+    }
+
+    function rescaleCues(cues, ratio) {
+        if (!cues || !cues.length || ratio === 1) return cues;
+        return cues.map(function (cue) {
+            return {
+                start: Math.round(cue.start * ratio),
+                end: Math.round(cue.end * ratio),
+                text: cue.text
+            };
+        });
+    }
+
     function silenceNativeTextTracks() {
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
@@ -3092,12 +3139,29 @@
 
             silenceNativeTextTracks();
 
+            self.calibrated = false;
+            self.tryCalibrate();
+
             clearInterval(self.timer);
             self.timer = setInterval(function () {
                 self.update();
             }, 50);
 
             self.update();
+        },
+        tryCalibrate: function () {
+            if (this.calibrated || !this.cues.length) return;
+
+            var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+            if (!video || !isFinite(video.duration) || video.duration < 60) return;
+
+            var ratio = detectFramerateRatio(this.cues);
+            this.calibrated = true;
+
+            if (ratio !== 1) {
+                this.cues = rescaleCues(this.cues, ratio);
+                logDebug('framerate auto-calibrated: ratio=' + ratio.toFixed(5) + ', stretched ' + this.cues.length + ' cues');
+            }
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
@@ -3108,6 +3172,8 @@
             if (!this.current || !this.cues.length) return;
 
             silenceNativeTextTracks();
+
+            if (!this.calibrated) this.tryCalibrate();
 
             for (var i = 0; i < this.cues.length; i++) {
                 if (time >= this.cues[i].start && time <= this.cues[i].end) {
@@ -3137,6 +3203,7 @@
             this.timer = 0;
             this.cues = [];
             this.loading = false;
+            this.calibrated = false;
 
             if (this.current) this.current.selected = false;
             this.current = null;
