@@ -82,6 +82,9 @@
     var subtitleSourceCache = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
+    var rendererTimingTrack = null;
+
+    var RENDERER_TRACK_LABEL = '__opensubtitles_ru_timing__';
 
     var settingsIcon = '<svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="6" width="30" height="22" rx="4" stroke="white" stroke-width="3"/><path d="M9 32h20" stroke="white" stroke-width="3" stroke-linecap="round"/><path d="M11 13h16M11 19h11" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -1139,8 +1142,10 @@
     function silenceNativeTextTracks() {
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
+            var track = tracks[i];
+            if (!track || track.label === RENDERER_TRACK_LABEL || track === rendererTimingTrack) continue;
             try {
-                if (tracks[i] && tracks[i].mode === 'showing') tracks[i].mode = 'disabled';
+                if (track.mode === 'showing') track.mode = 'disabled';
             }
             catch (e) {}
         }
@@ -1151,6 +1156,7 @@
             for (var j = 0; j < list.length; j++) {
                 var item = list[j];
                 if (!item || isOurSub(item)) continue;
+                if (item.label === RENDERER_TRACK_LABEL || item === rendererTimingTrack) continue;
                 try {
                     if (item.mode === 'showing') item.mode = 'disabled';
                 }
@@ -1161,6 +1167,84 @@
                 catch (e) {}
             }
         }
+    }
+
+    function ensureRendererTimingTrack() {
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+        if (!video || typeof video.addTextTrack !== 'function') return null;
+
+        if (rendererTimingTrack) {
+            try {
+                if (video.textTracks) {
+                    var found = false;
+                    for (var i = 0; i < video.textTracks.length; i++) {
+                        if (video.textTracks[i] === rendererTimingTrack) { found = true; break; }
+                    }
+                    if (!found) rendererTimingTrack = null;
+                }
+            }
+            catch (e) { rendererTimingTrack = null; }
+        }
+
+        if (!rendererTimingTrack) {
+            try {
+                rendererTimingTrack = video.addTextTrack('metadata', RENDERER_TRACK_LABEL, '');
+            }
+            catch (e) {
+                rendererTimingTrack = null;
+            }
+        }
+
+        return rendererTimingTrack;
+    }
+
+    function clearRendererTimingTrack() {
+        if (!rendererTimingTrack) return;
+        try { rendererTimingTrack.oncuechange = null; }
+        catch (e) {}
+        try {
+            while (rendererTimingTrack.cues && rendererTimingTrack.cues.length) {
+                rendererTimingTrack.removeCue(rendererTimingTrack.cues[0]);
+            }
+        }
+        catch (e) {}
+        try { rendererTimingTrack.mode = 'disabled'; }
+        catch (e) {}
+    }
+
+    function applyCuesToTimingTrack(cues, shiftSec, onCueChange) {
+        var track = ensureRendererTimingTrack();
+        if (!track) return null;
+
+        var Ctor = window.VTTCue || window.TextTrackCue;
+        if (typeof Ctor !== 'function') return null;
+
+        try { track.oncuechange = null; }
+        catch (e) {}
+
+        try {
+            while (track.cues && track.cues.length) track.removeCue(track.cues[0]);
+        }
+        catch (e) {}
+
+        var shift = Number(shiftSec) || 0;
+        for (var i = 0; i < (cues || []).length; i++) {
+            var startSec = (cues[i].start / 1000) + shift;
+            var endSec = (cues[i].end / 1000) + shift;
+            if (!(endSec > startSec)) continue;
+            try {
+                track.addCue(new Ctor(Math.max(0, startSec), Math.max(startSec + 0.001, endSec), cues[i].text || ''));
+            }
+            catch (e) {}
+        }
+
+        try { track.mode = 'hidden'; }
+        catch (e) {}
+
+        try { track.oncuechange = onCueChange; }
+        catch (e) {}
+
+        return track;
     }
 
     function nativeMediaKey() {
@@ -2867,7 +2951,7 @@
         start: function () {
             var self = this;
 
-            logDebug('renderer.start: timer fires every 200ms');
+            logDebug('renderer.start: timer fires every 100ms, cuechange in parallel');
 
             try { installToPanel(); }
             catch (e) { logDebug('renderer.start install panel error', e && e.message); }
@@ -2878,12 +2962,30 @@
 
             silenceNativeTextTracks();
 
+            self.lastShift = parseInt(storage('player_subs_shift_time', '0'), 10) || 0;
+            applyCuesToTimingTrack(self.cues, self.lastShift, function () {
+                self.emitFromTimingTrack();
+            });
+
             clearInterval(self.timer);
             self.timer = setInterval(function () {
                 self.update();
-            }, 200);
+            }, 100);
 
             self.update();
+        },
+        emitFromTimingTrack: function () {
+            if (!this.current || !rendererTimingTrack) return;
+            var active = rendererTimingTrack.activeCues;
+            var text = '';
+            if (active && active.length) {
+                for (var i = 0; i < active.length; i++) {
+                    text += (text ? '\n' : '') + (active[i].text || '');
+                }
+            }
+            if (this.lastText === text) return;
+            this.lastText = text;
+            showSubtitleText(text);
         },
         update: function () {
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
@@ -2895,6 +2997,14 @@
 
             silenceNativeTextTracks();
 
+            if (shift !== this.lastShift) {
+                this.lastShift = shift;
+                var self = this;
+                applyCuesToTimingTrack(this.cues, shift, function () {
+                    self.emitFromTimingTrack();
+                });
+            }
+
             for (var i = 0; i < this.cues.length; i++) {
                 if (time >= this.cues[i].start && time <= this.cues[i].end) {
                     text = this.cues[i].text;
@@ -2902,9 +3012,9 @@
                 }
             }
 
-            if (this.lastText !== text) {
-                logDebug('cue change at ' + Math.round(time) + 'ms: "' + (text ? text.substring(0, 40) : '<empty>') + '"');
-            }
+            if (this.lastText === text) return;
+
+            logDebug('cue change at ' + Math.round(time) + 'ms: "' + (text ? text.substring(0, 40) : '<empty>') + '"');
 
             this.lastText = text;
             showSubtitleText(text);
@@ -2919,10 +3029,12 @@
             subtitleNetwork.clear();
             serviceNetwork.clear();
             hideTranslationStatus();
+            clearRendererTimingTrack();
 
             this.timer = 0;
             this.cues = [];
             this.loading = false;
+            this.lastShift = 0;
 
             if (this.current) this.current.selected = false;
             this.current = null;
