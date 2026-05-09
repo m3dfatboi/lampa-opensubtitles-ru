@@ -1269,23 +1269,6 @@
             }
             catch (e) {}
         }
-
-        var panelLists = [latestPanelSubs, lastKnownSubs];
-        for (var p = 0; p < panelLists.length; p++) {
-            var list = panelLists[p] || [];
-            for (var j = 0; j < list.length; j++) {
-                var item = list[j];
-                if (!item || isOurSub(item)) continue;
-                try {
-                    if (item.mode === 'showing') item.mode = 'disabled';
-                }
-                catch (e) {}
-                try {
-                    if (item.selected === true) item.selected = false;
-                }
-                catch (e) {}
-            }
-        }
     }
 
     function nativeMediaKey() {
@@ -3212,9 +3195,19 @@
             }
         },
         update: function () {
+            if (Lampa.Player && typeof Lampa.Player.opened === 'function' && !Lampa.Player.opened()) {
+                this.disable();
+                return;
+            }
+
             var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+            if (!video) {
+                this.disable();
+                return;
+            }
+
             var shift = currentSubtitleShift();
-            var time = video && typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
+            var time = typeof video.currentTime === 'number' ? (video.currentTime - shift) * 1000 : 0;
             var text = '';
 
             if (!this.current || !this.cues.length) return;
