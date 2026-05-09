@@ -40,10 +40,18 @@ function createBot(overrides = {}) {
     listUserTranslations: () => [],
     listUserDevices: () => [],
     stats: () => ({
-      users: 0,
-      paid: { count: 0, amount: 0 },
-      cache: { count: 0, hits: 0 },
-      jobs: []
+      users: { linked: 0, anonymous: 0, unlimited: 0, blocked: 0 },
+      payments: { count: 0, amount: 0, credits_sold: 0 },
+      credits_outstanding: 0,
+      translations: {
+        completed: 0,
+        failed: 0,
+        in_flight: 0,
+        credits_spent: 0,
+        chars_translated: 0,
+        last_24h: { count: 0, credits: 0 },
+        last_7d: { count: 0, credits: 0 }
+      }
     }),
     countLinkedUsers: () => 0,
     listLinkedUsers: () => [],
@@ -293,7 +301,7 @@ test('admin /stats includes a clickable list of linked users', async () => {
   });
 
   const text = sent[0].text;
-  assert.match(text, /Пользователи с Telegram/);
+  assert.match(text, /Активные пользователи/);
   assert.match(text, /tg:\/\/user\?id=11111/);
   assert.match(text, /@vanya/);
   assert.match(text, /Иван/);

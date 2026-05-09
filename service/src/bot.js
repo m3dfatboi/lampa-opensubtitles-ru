@@ -431,27 +431,46 @@ export class TelegramBot {
 
     if (command === '/stats') {
       const stats = this.store.stats();
-      const linkedCount = this.store.countLinkedUsers ? this.store.countLinkedUsers() : 0;
       const userLimit = Math.max(1, Math.min(100, Number.parseInt(arg1, 10) || 30));
       const linkedUsers = this.store.listLinkedUsers ? this.store.listLinkedUsers(userLimit) : [];
 
+      const u = stats.users;
+      const p = stats.payments;
+      const t = stats.translations;
+      const totalTranslations = t.completed + t.failed;
+      const successRate = totalTranslations > 0 ? Math.round((t.completed / totalTranslations) * 100) : 0;
+      const charsM = (Number(t.chars_translated) / 1_000_000).toFixed(2);
+
       const lines = [
-        `Пользователей: ${stats.users} (${linkedCount} с Telegram)`,
-        `Оплачено: ${stats.paid.count} платежей / ${Number(stats.paid.amount).toFixed(2)} ₽`,
-        `Кэш: ${stats.cache.count} переводов / ${stats.cache.hits} попаданий`,
-        'Задачи:',
-        ...stats.jobs.map((row) => `${row.status}: ${row.count}`)
+        '<b>Пользователи</b>',
+        `· С Telegram: ${u.linked}${u.unlimited ? ` (${u.unlimited} безлимит)` : ''}`,
+        `· Анонимные устройства: ${u.anonymous}`
       ];
+      if (u.blocked) lines.push(`· Заблокированных: ${u.blocked}`);
+
+      lines.push('');
+      lines.push('<b>Деньги</b>');
+      lines.push(`· Платежей: ${p.count} на ${Number(p.amount).toFixed(0)} ₽`);
+      lines.push(`· Куплено кредитов: ${p.credits_sold}`);
+      lines.push(`· Не потрачено пользователями: ${stats.credits_outstanding} кр.`);
+
+      lines.push('');
+      lines.push('<b>Переводы</b>');
+      lines.push(`· Успешно: ${t.completed} · Ошибок: ${t.failed}` + (t.in_flight ? ` · В работе: ${t.in_flight}` : ''));
+      if (totalTranslations) lines.push(`· Успешность: ${successRate}%`);
+      lines.push(`· За сутки: ${t.last_24h.count} (${t.last_24h.credits} кр.)`);
+      lines.push(`· За неделю: ${t.last_7d.count} (${t.last_7d.credits} кр.)`);
+      lines.push(`· Всего списано: ${t.credits_spent} кр. · переведено ${charsM} млн символов`);
 
       if (linkedUsers.length) {
         lines.push('');
-        lines.push(`<b>Пользователи с Telegram</b> (последние ${linkedUsers.length}${linkedCount > linkedUsers.length ? ` из ${linkedCount}` : ''}):`);
+        lines.push(`<b>Активные пользователи</b> (последние ${linkedUsers.length}${u.linked > linkedUsers.length ? ` из ${u.linked}` : ''})`);
         linkedUsers.forEach((user, index) => {
           lines.push(formatUserForStats(user, index + 1));
         });
-        if (linkedCount > linkedUsers.length) {
+        if (u.linked > linkedUsers.length) {
           lines.push('');
-          lines.push(`Показать больше: <code>/stats N</code> (до 100)`);
+          lines.push(`Больше: <code>/stats N</code> (до 100)`);
         }
       }
 

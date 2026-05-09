@@ -630,11 +630,38 @@ export class Store {
   }
 
   stats() {
-    const users = this.db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
-    const paid = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CAST(amount AS REAL)), 0) AS amount FROM payments WHERE status = 'paid'").get();
-    const jobs = this.db.prepare('SELECT status, COUNT(*) AS count FROM translations GROUP BY status').all();
-    const cache = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(hits), 0) AS hits FROM subtitle_cache').get();
-    const chunkCache = this.db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(hits), 0) AS hits FROM subtitle_chunk_cache').get();
-    return { users, paid, jobs, cache, chunkCache };
+    const linked = this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE telegram_id NOT LIKE 'anon:%'").get().count;
+    const anonymous = this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE telegram_id LIKE 'anon:%'").get().count;
+    const unlimited = this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE unlimited = 1 AND telegram_id NOT LIKE 'anon:%'").get().count;
+    const blocked = this.db.prepare('SELECT COUNT(*) AS count FROM users WHERE blocked = 1').get().count;
+
+    const paid = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CAST(amount AS REAL)), 0) AS amount, COALESCE(SUM(credits), 0) AS credits FROM payments WHERE status = 'paid'").get();
+
+    const balanceRow = this.db.prepare("SELECT COALESCE(SUM(balance), 0) AS total FROM users WHERE unlimited = 0 AND blocked = 0 AND telegram_id NOT LIKE 'anon:%'").get();
+
+    const completed = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(credits_spent), 0) AS credits, COALESCE(SUM(source_chars), 0) AS chars FROM translations WHERE status = 'completed'").get();
+    const failed = this.db.prepare("SELECT COUNT(*) AS count FROM translations WHERE status = 'failed'").get().count;
+    const inFlight = this.db.prepare("SELECT COUNT(*) AS count FROM translations WHERE status IN ('queued', 'processing')").get().count;
+
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const day = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(credits_spent), 0) AS credits FROM translations WHERE status = 'completed' AND COALESCE(completed_at, created_at) >= ?").get(dayAgo);
+    const week = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(credits_spent), 0) AS credits FROM translations WHERE status = 'completed' AND COALESCE(completed_at, created_at) >= ?").get(weekAgo);
+
+    return {
+      users: { linked, anonymous, unlimited, blocked },
+      payments: { count: paid.count, amount: Number(paid.amount) || 0, credits_sold: paid.credits },
+      credits_outstanding: balanceRow.total,
+      translations: {
+        completed: completed.count,
+        failed,
+        in_flight: inFlight,
+        credits_spent: completed.credits,
+        chars_translated: completed.chars,
+        last_24h: { count: day.count, credits: day.credits },
+        last_7d: { count: week.count, credits: week.credits }
+      }
+    };
   }
 }
