@@ -1140,9 +1140,26 @@
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
             try {
-                if (tracks[i] && tracks[i].mode === 'showing') tracks[i].mode = 'hidden';
+                if (tracks[i] && tracks[i].mode === 'showing') tracks[i].mode = 'disabled';
             }
             catch (e) {}
+        }
+
+        var panelLists = [latestPanelSubs, lastKnownSubs];
+        for (var p = 0; p < panelLists.length; p++) {
+            var list = panelLists[p] || [];
+            for (var j = 0; j < list.length; j++) {
+                var item = list[j];
+                if (!item || isOurSub(item)) continue;
+                try {
+                    if (item.mode === 'showing') item.mode = 'disabled';
+                }
+                catch (e) {}
+                try {
+                    if (item.selected === true) item.selected = false;
+                }
+                catch (e) {}
+            }
         }
     }
 
