@@ -568,15 +568,7 @@ export class Store {
         WHERE id = ?
       `).run(JSON.stringify(translatedCues), creditsSpent, nowIso(), nowIso(), job.id);
 
-      this.saveCachedTranslation({
-        cache_key: job.cache_key,
-        source_hash: job.cache_key.split(':').pop() || job.cache_key,
-        source_language: job.source_language,
-        target_language: job.target_language,
-        model: job.model,
-        source_chars: job.source_chars,
-        cues: translatedCues
-      });
+      this.db.prepare('DELETE FROM subtitle_chunk_cache WHERE cache_key = ?').run(job.cache_key);
     });
   }
 

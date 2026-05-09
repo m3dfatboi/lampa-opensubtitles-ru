@@ -77,13 +77,6 @@ export class TranslationQueue {
     this.store.updateJobStatus(job.id, 'processing', job.progress || '0%');
 
     try {
-      const cached = this.store.getCachedTranslation(job.cache_key);
-      if (cached) {
-        this.store.completeJob(job, cached.cues);
-        this.fireOnJobComplete(job.id);
-        return;
-      }
-
       const sourceCues = JSON.parse(job.cues_json || '[]');
       const media = JSON.parse(job.media_json || '{}');
       const translated = await this.translator.translate({
@@ -292,17 +285,6 @@ export class LampaTranslateService {
     if (chars > this.config.product.maxSubtitleChars) throw new HttpError(413, 'subtitle file is too large');
 
     const cacheKey = this.translator.cacheKey({ cues, rawText, sourceLanguage, targetLanguage });
-    const cached = this.store.getCachedTranslation(cacheKey);
-    if (cached) {
-      return {
-        status: 'completed',
-        credits_spent: 0,
-        balance: user.balance,
-        anonymous,
-        free_trial: anonymous ? freeTrialPayload(this.store.getAnonymousUsage(input.device_id), this.config.product.anonymousFreeTranslations) : undefined,
-        cues: cached.cues
-      };
-    }
 
     const existing = this.store.findActiveJobByUserCache(user.id, cacheKey);
     if (existing) {
@@ -382,12 +364,10 @@ export class LampaTranslateService {
 
     if (!cues.length) throw new HttpError(400, 'empty subtitles');
 
-    const cacheKey = this.translator.cacheKey({ cues, rawText, sourceLanguage, targetLanguage });
-    const cached = Boolean(this.store.getCachedTranslation(cacheKey));
     const credits = Math.max(1, Math.ceil(chars / this.config.product.creditChars));
 
     return {
-      cached,
+      cached: false,
       credits,
       source_chars: chars,
       source_language: sourceLanguage,

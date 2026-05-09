@@ -154,13 +154,15 @@ test('subtitle cues are normalized before translation', () => {
   ]);
 });
 
-test('translation reserves credits once and then returns cached result', async () => withStore(async ({ config, store }) => {
+test('translation reserves credits and re-translates on every request', async () => withStore(async ({ config, store }) => {
+  let translateCalls = 0;
   const service = new LampaTranslateService({
     config,
     store,
     translator: {
       cacheKey: ({ cues }) => `cache:${cues.map((cue) => cue.text).join('|')}`,
       translate: async ({ cues, onProgress }) => {
+        translateCalls++;
         onProgress('1/1');
         return cues.map((cue) => ({ ...cue, text: `RU ${cue.text}` }));
       }
@@ -191,23 +193,23 @@ test('translation reserves credits once and then returns cached result', async (
   assert.equal(completed.status, 'completed');
   assert.equal(completed.credits_spent, 1);
   assert.equal(completed.cues[0].text, 'RU Hello');
+  assert.equal(translateCalls, 1);
 
-  const cached = service.startTranslation(auth, body);
-  assert.equal(cached.status, 'completed');
-  assert.equal(cached.credits_spent, 0);
-  assert.equal(cached.balance, 2);
+  const reTranslated = service.startTranslation(auth, body);
+  assert.equal(reTranslated.status, 'queued');
+  assert.equal(reTranslated.reserved_credits, 1);
+  assert.equal(reTranslated.balance, 1);
 
-  const checkBefore = service.checkTranslation(auth, body);
-  assert.equal(checkBefore.cached, true);
-  assert.equal(checkBefore.credits, 1);
-  assert.equal(checkBefore.source_chars, 5);
+  await sleep(30);
+  const completedAgain = service.getTranslation(auth, reTranslated.job_id);
+  assert.equal(completedAgain.status, 'completed');
+  assert.equal(completedAgain.credits_spent, 1);
+  assert.equal(translateCalls, 2);
 
-  const checkMiss = service.checkTranslation(auth, {
-    ...body,
-    subtitle: { cues: [{ start: 0, end: 1000, text: 'Different line' }] }
-  });
-  assert.equal(checkMiss.cached, false);
-  assert.equal(checkMiss.credits, 1);
+  const check = service.checkTranslation(auth, body);
+  assert.equal(check.cached, false);
+  assert.equal(check.credits, 1);
+  assert.equal(check.source_chars, 5);
 }));
 
 test('anonymous device gets three free translations before linking', async () => withStore(async ({ config, store }) => {
@@ -248,21 +250,6 @@ test('anonymous device gets three free translations before linking', async () =>
     assert.equal(completed.status, 'completed');
   }
 
-  assert.equal(translateCount, 3);
-
-  const cached = service.startTranslation('', {
-    device_id: 'anon-device',
-    plugin_version: 'test',
-    platform: 'browser',
-    source_language: 'eng',
-    target_language: 'rus',
-    subtitle: {
-      cues: [{ start: 0, end: 1000, text: 'Hello 1' }]
-    }
-  });
-  assert.equal(cached.status, 'completed');
-  assert.equal(cached.free_trial_activated, undefined);
-  assert.equal(cached.free_trial.used, 3);
   assert.equal(translateCount, 3);
 
   let limitError = null;
