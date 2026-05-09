@@ -387,7 +387,8 @@
             },
             onChange: function () {
                 var removed = clearTranslationCache();
-                notify(removed ? 'Удалено переводов: ' + removed : 'Кеш и так пуст');
+                if (removed) notify('Локальный кеш очищен: удалено ' + removed + '. Серверные переводы остаются доступны мгновенно');
+                else notify('Кеш и так пуст');
                 refreshAllCacheStatusTexts();
             }
         });
@@ -1189,40 +1190,62 @@
         return tracks && tracks.length ? Array.prototype.slice.call(tracks) : [];
     }
 
-    var FRAMERATE_RATIOS = [
-        23.976 / 24,
-        24 / 23.976,
-        23.976 / 25,
-        25 / 23.976,
-        24 / 25,
-        25 / 24,
-        29.97 / 25,
-        25 / 29.97,
-        29.97 / 24,
-        24 / 29.97,
-        30 / 29.97,
-        29.97 / 30
-    ];
+    var COMMON_FRAMERATES = [23.976, 24, 25, 29.97, 30, 50, 60];
+    var ASSUMED_SUBTITLE_FPS = 23.976;
 
-    function detectFramerateRatio(cues) {
-        if (!cues || !cues.length) return 1;
+    function detectVideoFps(video) {
+        if (!video) return null;
+        var elapsed = video.currentTime;
+        if (!elapsed || elapsed < 10) return null;
+
+        var frames = null;
+        try {
+            if (typeof video.getVideoPlaybackQuality === 'function') {
+                var q = video.getVideoPlaybackQuality();
+                if (q && q.totalVideoFrames) frames = q.totalVideoFrames;
+            }
+        }
+        catch (e) {}
+        if (!frames && typeof video.webkitDecodedFrameCount === 'number') frames = video.webkitDecodedFrameCount;
+        if (!frames && typeof video.mozDecodedFrames === 'number') frames = video.mozDecodedFrames;
+
+        if (!frames || frames < 100) return null;
+
+        var measuredFps = frames / elapsed;
+        var bestFps = null;
+        var bestDiff = 0.1;
+        for (var i = 0; i < COMMON_FRAMERATES.length; i++) {
+            var diff = Math.abs(measuredFps - COMMON_FRAMERATES[i]);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestFps = COMMON_FRAMERATES[i];
+            }
+        }
+        return bestFps;
+    }
+
+    function detectFramerateInfo(cues) {
+        if (!cues || !cues.length) return null;
 
         var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-        var duration = video && video.duration;
-        if (!duration || !isFinite(duration) || duration < 60) return 1;
+        if (!video) return null;
 
-        var lastEndSec = cues[cues.length - 1].end / 1000;
-        if (lastEndSec < duration * 0.7) return 1;
-        if (lastEndSec > duration * 1.05) return 1;
+        var videoFps = detectVideoFps(video);
+        if (!videoFps) return null;
 
-        var ratio = duration / lastEndSec;
-        var tolerance = 0.005;
+        var ratio = ASSUMED_SUBTITLE_FPS / videoFps;
+        if (Math.abs(ratio - 1) < 0.005) return { videoFps: videoFps, ratio: 1, shouldRescale: false };
 
-        for (var i = 0; i < FRAMERATE_RATIOS.length; i++) {
-            if (Math.abs(ratio - FRAMERATE_RATIOS[i]) < tolerance) return FRAMERATE_RATIOS[i];
+        var duration = video.duration;
+        if (duration && isFinite(duration) && duration > 60) {
+            var lastEndSec = cues[cues.length - 1].end / 1000;
+            var rescaledEnd = lastEndSec * ratio;
+            if (rescaledEnd < duration * 0.5 || rescaledEnd > duration * 1.05) {
+                return { videoFps: videoFps, ratio: 1, shouldRescale: false };
+            }
         }
 
-        return 1;
+        return { videoFps: videoFps, ratio: ratio, shouldRescale: true };
     }
 
     function rescaleCues(cues, ratio) {
@@ -2293,6 +2316,8 @@
             catch (e) {}
         }
         translationMemory = {};
+        translationCheckResults = {};
+        translationCheckInflight = {};
         logDebug('translation cache: cleared', keys.length, 'entries');
         return keys.length;
     }
@@ -3164,15 +3189,24 @@
         tryCalibrate: function () {
             if (this.calibrated || !this.cues.length) return;
 
-            var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
-            if (!video || !isFinite(video.duration) || video.duration < 60) return;
+            this.calibrationAttempts = (this.calibrationAttempts || 0) + 1;
+            if (this.calibrationAttempts > 1200) {
+                this.calibrated = true;
+                logDebug('framerate auto-calibration: gave up, FPS unmeasurable');
+                return;
+            }
 
-            var ratio = detectFramerateRatio(this.cues);
+            var info = detectFramerateInfo(this.cues);
+            if (!info) return;
+
             this.calibrated = true;
-
-            if (ratio !== 1) {
-                this.cues = rescaleCues(this.cues, ratio);
-                logDebug('framerate auto-calibrated: ratio=' + ratio.toFixed(5) + ', stretched ' + this.cues.length + ' cues');
+            if (info.shouldRescale) {
+                this.cues = rescaleCues(this.cues, info.ratio);
+                logDebug('framerate calibrated: video=' + info.videoFps + 'fps, ratio=' + info.ratio.toFixed(5) + ', ' + this.cues.length + ' cues');
+                notify('Тайминги выровнены под ' + info.videoFps + 'fps');
+            }
+            else {
+                logDebug('framerate calibrated: video=' + info.videoFps + 'fps, no rescale needed');
             }
         },
         update: function () {
@@ -3216,6 +3250,7 @@
             this.cues = [];
             this.loading = false;
             this.calibrated = false;
+            this.calibrationAttempts = 0;
 
             if (this.current) this.current.selected = false;
             this.current = null;
