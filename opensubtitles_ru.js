@@ -2432,13 +2432,25 @@
         var parts = ['Автоперевод готов'];
         if (!result) return parts.join('');
 
-        if (typeof result.credits_spent !== 'undefined') {
-            var spent = Number(result.credits_spent) || 0;
-            if (spent > 0) parts.push('Списано ' + spent + ' кр.');
-            else parts.push('Из кеша, бесплатно');
+        var unlimited = isAccountUnlimited() || result.unlimited === true;
+        var anonymous = result.anonymous === true;
+        var spent = Number(result.credits_spent) || 0;
+
+        if (spent > 0) {
+            parts.push('Списано ' + spent + ' кр.');
+        }
+        else if (!unlimited && !anonymous) {
+            parts.push('Бесплатно');
         }
 
-        if (typeof result.balance !== 'undefined' && result.balance !== null) {
+        if (unlimited) {
+            parts.push('Безлимит');
+        }
+        else if (anonymous && result.free_trial) {
+            var remaining = Math.max(0, (result.free_trial.limit || 0) - (result.free_trial.used || 0));
+            parts.push('Осталось бесплатных: ' + remaining + ' из ' + (result.free_trial.limit || 0));
+        }
+        else if (typeof result.balance !== 'undefined' && result.balance !== null) {
             parts.push('Баланс: ' + result.balance + ' кр.');
         }
 
