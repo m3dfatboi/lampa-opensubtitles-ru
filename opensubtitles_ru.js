@@ -1317,6 +1317,28 @@
         }
     }
 
+    function watchNativeTextTracksForUserPicks() {
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+        if (!video) return;
+        var tracks = video.textTracks;
+        if (!tracks || typeof tracks.addEventListener !== 'function') return;
+        if (tracks._opensub_change_hook === PLUGIN_VERSION) return;
+
+        tracks.addEventListener('change', function () {
+            if (!renderer.current) return;
+
+            for (var i = 0; i < tracks.length; i++) {
+                if (tracks[i] && tracks[i].mode === 'showing') {
+                    logDebug('native textTrack went showing, yielding our renderer');
+                    renderer.disable();
+                    return;
+                }
+            }
+        });
+
+        tracks._opensub_change_hook = PLUGIN_VERSION;
+    }
+
     function nativeMediaKey() {
         var data = lastPlayerData || {};
         var card = activeCard(data);
@@ -3192,6 +3214,7 @@
             }
 
             silenceNativeTextTracks();
+            watchNativeTextTracksForUserPicks();
 
             self.calibrated = false;
             self.tryCalibrate();
