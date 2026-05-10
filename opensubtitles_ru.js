@@ -1306,31 +1306,116 @@
     }
 
     var SUBS_OFF_BODY_CLASS = 'opensubtitles-ru-subs-off';
+    var subsHideObserver = null;
 
     function ensureSubsOffStyles() {
         if (typeof document === 'undefined' || !document.head) return;
         if (document.getElementById('opensubtitles-ru-subs-off-styles')) return;
 
+        var hideRule = 'display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;';
+        var prefix = 'body.' + SUBS_OFF_BODY_CLASS + ' ';
+
         var style = document.createElement('style');
         style.id = 'opensubtitles-ru-subs-off-styles';
         style.textContent =
-            'body.' + SUBS_OFF_BODY_CLASS + ' .subtitles,' +
-            'body.' + SUBS_OFF_BODY_CLASS + ' .player-subtitles,' +
-            'body.' + SUBS_OFF_BODY_CLASS + ' .player .subtitles,' +
-            'body.' + SUBS_OFF_BODY_CLASS + ' [class*="subtitle"]:not([class*="settings"]):not([class*="opensubtitles"]):not([class*="opensub-"]) {' +
-                'display: none !important;' +
-                'visibility: hidden !important;' +
-                'opacity: 0 !important;' +
+            prefix + '.subtitles,' +
+            prefix + '.player-subtitles,' +
+            prefix + '.player .subtitles,' +
+            prefix + '.player-video .subtitles,' +
+            prefix + '.player-position .subtitles,' +
+            prefix + '[class*="subtitle"]:not([class*="settings"]):not([class*="opensubtitles"]):not([class*="opensub-"]),' +
+            prefix + '[class*="caption"]:not([class*="settings"]):not([class*="opensubtitles"]):not([class*="opensub-"]),' +
+            prefix + 'video::cue,' +
+            prefix + 'video::-webkit-media-text-track-container,' +
+            prefix + 'video::-webkit-media-text-track-display,' +
+            prefix + 'video::-webkit-media-text-track-display-backdrop {' +
+                hideRule +
             '}';
         document.head.appendChild(style);
+    }
+
+    function isOurDomElement(el) {
+        if (!el || !el.className) return false;
+        var cls = typeof el.className === 'string' ? el.className : (el.className.baseVal || '');
+        return cls.indexOf('opensubtitles') >= 0 || cls.indexOf('opensub-') >= 0;
+    }
+
+    function looksLikeSubtitleNode(el) {
+        if (!el || el.nodeType !== 1) return false;
+        if (isOurDomElement(el)) return false;
+        var cls = (typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal || '')).toLowerCase();
+        if (!cls) return false;
+        if (cls.indexOf('settings') >= 0) return false;
+        return cls.indexOf('subtitle') >= 0 || cls.indexOf('caption') >= 0;
+    }
+
+    function forceHideSubtitleNodes() {
+        if (typeof document === 'undefined') return;
+        var nodes;
+        try {
+            nodes = document.querySelectorAll('[class*="subtitle"],[class*="caption"]');
+        }
+        catch (e) { return; }
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (!looksLikeSubtitleNode(el)) continue;
+            try {
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('visibility', 'hidden', 'important');
+            }
+            catch (e) {}
+        }
+    }
+
+    function restoreSubtitleNodes() {
+        if (typeof document === 'undefined') return;
+        var nodes;
+        try {
+            nodes = document.querySelectorAll('[class*="subtitle"],[class*="caption"]');
+        }
+        catch (e) { return; }
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (!looksLikeSubtitleNode(el)) continue;
+            try {
+                el.style.removeProperty('display');
+                el.style.removeProperty('visibility');
+            }
+            catch (e) {}
+        }
+    }
+
+    function startSubsHideObserver() {
+        if (subsHideObserver || typeof MutationObserver === 'undefined' || !document.body) return;
+        subsHideObserver = new MutationObserver(function () {
+            if (!document.body.classList.contains(SUBS_OFF_BODY_CLASS)) return;
+            forceHideSubtitleNodes();
+        });
+        try { subsHideObserver.observe(document.body, { childList: true, subtree: true }); }
+        catch (e) { subsHideObserver = null; }
+    }
+
+    function stopSubsHideObserver() {
+        if (!subsHideObserver) return;
+        try { subsHideObserver.disconnect(); }
+        catch (e) {}
+        subsHideObserver = null;
     }
 
     function setSubsContainerHidden(hidden) {
         if (typeof document === 'undefined' || !document.body) return;
         ensureSubsOffStyles();
         try {
-            if (hidden) document.body.classList.add(SUBS_OFF_BODY_CLASS);
-            else document.body.classList.remove(SUBS_OFF_BODY_CLASS);
+            if (hidden) {
+                document.body.classList.add(SUBS_OFF_BODY_CLASS);
+                forceHideSubtitleNodes();
+                startSubsHideObserver();
+            }
+            else {
+                stopSubsHideObserver();
+                document.body.classList.remove(SUBS_OFF_BODY_CLASS);
+                restoreSubtitleNodes();
+            }
         }
         catch (e) {}
     }
