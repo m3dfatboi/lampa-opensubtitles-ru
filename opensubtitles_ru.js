@@ -1315,6 +1315,19 @@
             }
             catch (e) {}
         }
+
+        var lists = [latestPanelSubs, lastKnownSubs];
+        for (var p = 0; p < lists.length; p++) {
+            var list = lists[p] || [];
+            for (var j = 0; j < list.length; j++) {
+                var item = list[j];
+                if (!item || isOurSub(item)) continue;
+                try { if (item.mode === 'showing') item.mode = 'disabled'; }
+                catch (e) {}
+                try { if (item.selected === true) item.selected = false; }
+                catch (e) {}
+            }
+        }
     }
 
     function watchNativeTextTracksForUserPicks() {
