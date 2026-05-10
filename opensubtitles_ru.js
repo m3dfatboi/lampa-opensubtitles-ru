@@ -3240,8 +3240,6 @@
 
             if (!this.current || !this.cues.length) return;
 
-            silenceNativeTextTracks();
-
             if (!this.calibrated) this.tryCalibrate();
 
             for (var i = 0; i < this.cues.length; i++) {
