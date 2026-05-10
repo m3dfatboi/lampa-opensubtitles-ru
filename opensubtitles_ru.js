@@ -79,7 +79,6 @@
     var translationPrefetched = {};
     var translationCheckResults = {};
     var translationCheckInflight = {};
-    var subtitleSourceCache = {};
     var translationStatusNode = null;
     var translationStatusTextNode = null;
 
@@ -348,20 +347,29 @@
                 type: 'button'
             },
             field: {
-                name: 'Включить ИИ перевод субтитров',
+                name: aiAccountSettingsName(),
                 description: accountStatusText()
             },
             onRender: function (item) {
-                updateAccountSettingsText(item);
+                accountSettingsItem = item;
+                refreshAccountSettingsItem();
                 refreshAccountState(function () {
-                    updateAccountSettingsText(item);
+                    refreshAccountSettingsItem();
                 });
             },
             onChange: function () {
+                if (isAccountLinked()) {
+                    unlinkAccount();
+                    notify('Аккаунт отвязан');
+                    refreshAccountSettingsItem();
+                    return;
+                }
+
                 Lampa.Storage.set(PLUGIN_ID + '_translate_enabled', true);
                 refreshAccountState(function (account) {
                     if (account && account.linked) {
                         notify('ИИ перевод включен. ' + accountStatusText());
+                        refreshAccountSettingsItem();
                     }
                     else {
                         showServiceConnectModal();
@@ -482,6 +490,41 @@
         if (token) setPersistentStorage(PLUGIN_ID + '_device_token', token);
     }
 
+    function isAccountLinked() {
+        return persistentStorage(PLUGIN_ID + '_account_linked', 'false') === 'true';
+    }
+
+    function aiAccountSettingsName() {
+        return isAccountLinked() ? 'Отвязать ИИ перевод субтитров' : 'Включить ИИ перевод субтитров';
+    }
+
+    var accountSettingsItem = null;
+
+    function updateAccountSettingsName(item) {
+        var target = item || accountSettingsItem;
+        if (!target || !target.find) return;
+        try {
+            var nameEl = target.find('.settings-param__name').first();
+            if (nameEl.length) nameEl.text(aiAccountSettingsName());
+        }
+        catch (e) {}
+    }
+
+    function refreshAccountSettingsItem() {
+        if (!accountSettingsItem) return;
+        updateAccountSettingsName(accountSettingsItem);
+        updateAccountSettingsText(accountSettingsItem);
+    }
+
+    function unlinkAccount() {
+        clearDeviceToken();
+        setPersistentStorage(PLUGIN_ID + '_account_linked', 'false');
+        setPersistentStorage(PLUGIN_ID + '_account_unlimited', 'false');
+        clearPersistentStorage(PLUGIN_ID + '_account_balance');
+        clearPersistentStorage(PLUGIN_ID + '_free_used');
+        clearPersistentStorage(PLUGIN_ID + '_free_limit');
+    }
+
     function clearDeviceToken() {
         clearPersistentStorage(PLUGIN_ID + '_device_token');
     }
@@ -514,6 +557,9 @@
             setPersistentStorage(PLUGIN_ID + '_free_used', String(account.free_trial.used || 0));
             setPersistentStorage(PLUGIN_ID + '_free_limit', String(account.free_trial.limit || 3));
         }
+
+        try { refreshAccountSettingsItem(); }
+        catch (e) {}
     }
 
     function updateAccountSettingsText(item) {
@@ -1671,14 +1717,13 @@
     }
 
     function createSubtitleItem(item, index) {
-        var label = PLUGIN_TITLE + subtitleItemTitleSuffix(item);
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
             language: item.lang || selectedLanguage().code,
-            label: label,
-            title: label,
+            label: PLUGIN_TITLE,
+            title: PLUGIN_TITLE,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
@@ -2433,11 +2478,6 @@
         send(false);
     }
 
-    function subtitleItemTitleSuffix(item) {
-        if (!item || !item.url) return '';
-        return subtitleSourceCache[item.url] && subtitleSourceCache[item.url].length ? ' · ✓ в кеше' : '';
-    }
-
     function translationCompletionText(result) {
         var parts = ['Автоперевод готов'];
         if (!result) return parts.join('');
@@ -2963,21 +3003,11 @@
 
             self.disable(false);
             self.current = item;
+            self.loading = true;
             self.lastText = null;
             item.selected = true;
 
             showSubtitleText('');
-
-            var cached = item && item.url && subtitleSourceCache[item.url];
-            if (cached && cached.length) {
-                self.cues = cloneCues(cached);
-                self.loading = false;
-                logDebug('renderer.select: loaded from cache', self.cues.length, 'cues');
-                self.start();
-                return;
-            }
-
-            self.loading = true;
 
             subtitleNetwork.timeout(20000);
             subtitleNetwork.silent(item.url, function (text) {
@@ -2996,8 +3026,6 @@
                     self.disable();
                     return;
                 }
-
-                if (item.url) subtitleSourceCache[item.url] = cloneCues(self.cues);
 
                 self.start();
             }, function (xhr) {

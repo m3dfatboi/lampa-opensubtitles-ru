@@ -716,6 +716,7 @@ export class TelegramBot {
     const user = this.store.getUserById(job.user_id);
     if (!user) return;
 
+    const isAnonymous = String(user.telegram_id || '').startsWith('anon:');
     const media = safeParseMedia(job.media_json);
     const title = String(media.title || '').trim() || 'Без названия';
     const meta = [];
@@ -725,16 +726,24 @@ export class TelegramBot {
     if (media.year) meta.push(escapeHtml(String(media.year)));
 
     const langs = `${languageNameRu(job.source_language)} → ${languageNameRu(job.target_language)}`;
-    const credits = Number(job.credits_spent) > 0
-      ? `${job.credits_spent} кр.`
-      : (user.unlimited ? 'безлимит' : 'бесплатный лимит');
+    let costLabel;
+    if (Number(job.credits_spent) > 0) costLabel = `${job.credits_spent} кр.`;
+    else if (isAnonymous) costLabel = 'из бесплатного лимита';
+    else if (user.unlimited) costLabel = 'безлимит';
+    else costLabel = 'бесплатно';
+
+    let userTail;
+    if (isAnonymous) userTail = ' · бесплатные демо';
+    else if (user.unlimited) userTail = ' · безлимит';
+    else userTail = ` · баланс ${user.balance} кр.`;
+
     const tail = meta.length ? ` · ${meta.join(' · ')}` : '';
 
     const lines = [
       '<b>Новый перевод</b>',
-      formatUserMention(user) + (user.unlimited ? ' · безлимит' : ` · баланс ${user.balance} кр.`),
+      formatUserMention(user) + userTail,
       `<b>${escapeHtml(title)}</b>${tail}`,
-      `${langs} · ${credits} · ${Number(job.source_chars) || 0} симв.`
+      `${langs} · ${costLabel} · ${Number(job.source_chars) || 0} симв.`
     ];
 
     await this.notifyAdmins(lines.join('\n'), { skipTelegramId: user.telegram_id });
