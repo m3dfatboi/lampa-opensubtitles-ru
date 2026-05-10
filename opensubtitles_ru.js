@@ -495,7 +495,7 @@
     }
 
     function aiAccountSettingsName() {
-        return isAccountLinked() ? 'Отвязать аккаунт Telegram' : 'Подключить аккаунт Telegram';
+        return isAccountLinked() ? 'Отвязать устройство' : 'Включить ИИ перевод субтитров';
     }
 
     var accountSettingsItem = null;
