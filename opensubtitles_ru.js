@@ -1305,6 +1305,36 @@
         });
     }
 
+    var SUBS_OFF_BODY_CLASS = 'opensubtitles-ru-subs-off';
+
+    function ensureSubsOffStyles() {
+        if (typeof document === 'undefined' || !document.head) return;
+        if (document.getElementById('opensubtitles-ru-subs-off-styles')) return;
+
+        var style = document.createElement('style');
+        style.id = 'opensubtitles-ru-subs-off-styles';
+        style.textContent =
+            'body.' + SUBS_OFF_BODY_CLASS + ' .subtitles,' +
+            'body.' + SUBS_OFF_BODY_CLASS + ' .player-subtitles,' +
+            'body.' + SUBS_OFF_BODY_CLASS + ' .player .subtitles,' +
+            'body.' + SUBS_OFF_BODY_CLASS + ' [class*="subtitle"]:not([class*="settings"]):not([class*="opensubtitles"]):not([class*="opensub-"]) {' +
+                'display: none !important;' +
+                'visibility: hidden !important;' +
+                'opacity: 0 !important;' +
+            '}';
+        document.head.appendChild(style);
+    }
+
+    function setSubsContainerHidden(hidden) {
+        if (typeof document === 'undefined' || !document.body) return;
+        ensureSubsOffStyles();
+        try {
+            if (hidden) document.body.classList.add(SUBS_OFF_BODY_CLASS);
+            else document.body.classList.remove(SUBS_OFF_BODY_CLASS);
+        }
+        catch (e) {}
+    }
+
     function silenceNativeTextTracks() {
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
@@ -1343,12 +1373,13 @@
         if (tracks._opensub_change_hook === PLUGIN_VERSION) return;
 
         tracks.addEventListener('change', function () {
-            if (!renderer.current) return;
-
             for (var i = 0; i < tracks.length; i++) {
                 if (tracks[i] && tracks[i].mode === 'showing') {
-                    logDebug('native textTrack went showing, yielding our renderer');
-                    renderer.disable();
+                    setSubsContainerHidden(false);
+                    if (renderer.current) {
+                        logDebug('native textTrack went showing, yielding our renderer');
+                        renderer.disable();
+                    }
                     return;
                 }
             }
@@ -1598,6 +1629,7 @@
                     try { Lampa.PlayerVideo.subsview(false); }
                     catch (e) {}
                 }
+                setSubsContainerHidden(true);
             },
             get: function () { return ''; }
         });
@@ -3236,6 +3268,7 @@
             }
 
             silenceNativeTextTracks();
+            setSubsContainerHidden(false);
             watchNativeTextTracksForUserPicks();
 
             self.calibrated = false;
