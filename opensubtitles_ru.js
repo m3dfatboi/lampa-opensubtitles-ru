@@ -1548,10 +1548,12 @@
         Object.defineProperty(item, 'mode', {
             configurable: true,
             set: function (value) {
-                if (value === 'showing' && renderer.current) {
+                if (value !== 'showing') return;
+                if (renderer.current) {
                     logDebug('disabled picked: stopping renderer');
                     renderer.disable();
                 }
+                silenceNativeTextTracks();
             },
             get: function () { return ''; }
         });
@@ -2998,6 +3000,7 @@
 
             if (self.current === item && (self.loading || self.cues.length)) {
                 logDebug('renderer.select skipped: already current');
+                silenceNativeTextTracks();
                 return;
             }
 
@@ -3062,6 +3065,7 @@
 
             if (self.current === item && (self.loading || self.cues.length)) {
                 logDebug('renderer.selectTranslated skipped: already current');
+                silenceNativeTextTracks();
                 return;
             }
 
