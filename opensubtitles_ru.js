@@ -1328,6 +1328,11 @@
                 catch (e) {}
             }
         }
+
+        if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.customSubs === 'function') {
+            try { Lampa.PlayerVideo.customSubs([]); }
+            catch (e) {}
+        }
     }
 
     function watchNativeTextTracksForUserPicks() {
