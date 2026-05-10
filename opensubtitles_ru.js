@@ -1589,6 +1589,10 @@
                     renderer.disable();
                 }
                 silenceNativeTextTracks();
+                if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
+                    try { Lampa.PlayerVideo.subsview(false); }
+                    catch (e) {}
+                }
             },
             get: function () { return ''; }
         });
