@@ -788,13 +788,15 @@
         for (var i = 0; i < items.length; i++) {
             var item = items[i];
             if (!item || !item.IDSubtitleFile) continue;
+            var url = item.SubDownloadLink || ('https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile + '.srt');
             mapped.push({
                 id: item.IDSubtitle || item.IDSubtitleFile,
-                url: 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile + '.srt',
+                url: url,
                 lang: item.SubLanguageID || '',
                 SubEncoding: 'utf-8',
                 m: 'i',
-                g: String(parseInt(item.SubDownloadsCnt, 10) || 0)
+                g: String(parseInt(item.SubDownloadsCnt, 10) || 0),
+                _source: item._source || 'opensubtitles'
             });
         }
         return mapped;
@@ -826,6 +828,7 @@
             var rawList = [];
             var anySuccess = false;
             var lastError = null;
+            var subdlAttempted = false;
 
             logDebug('search', request.type, request.id, 'across', bases.length, 'addons + rest.opensubtitles.org');
 
@@ -887,6 +890,20 @@
 
                 logDebug('merged', rawList.length, '→ filtered', stremioSubs.length, 'for', selectedLanguage().code, 'translate candidates', translatedSubs.length);
 
+                if (!stremioSubs.length && !translatedSubs.length && !subdlAttempted) {
+                    subdlAttempted = true;
+                    fetchFromSubdl(card, request, function (extra) {
+                        if (playerId !== activePlayerId) return;
+                        if (extra && extra.length) {
+                            anySuccess = true;
+                            rawList = rawList.concat(extra);
+                            logDebug('subdl fallback added', extra.length, 'items');
+                        }
+                        finalize();
+                    });
+                    return;
+                }
+
                 if (!anySuccess) searchState = 'error';
                 else searchState = stremioSubs.length || translatedSubs.length ? 'ready' : 'empty';
 
@@ -903,6 +920,37 @@
                 }
             }
         });
+    }
+
+    function fetchFromSubdl(card, request, done) {
+        var parts = String(request && request.id || '').split(':');
+        var imdbId = parts[0] || '';
+        var season = parts[1] || '';
+        var episode = parts[2] || '';
+
+        var target = selectedLanguage();
+        var sourceLang = effectiveSourceLanguage(originalLanguageCode(card));
+        var seen = {};
+        var langs = [target.code, sourceLang].filter(function (code) {
+            if (!code || seen[code]) return false;
+            seen[code] = true;
+            return true;
+        });
+
+        var qs = 'imdb_id=' + encodeURIComponent(imdbId) +
+            '&languages=' + encodeURIComponent(langs.join(','));
+        if (season) qs += '&season=' + encodeURIComponent(season);
+        if (episode) qs += '&episode=' + encodeURIComponent(episode);
+
+        logDebug('subdl fallback request', qs);
+
+        serviceRequest('/v1/external/subtitles/search?' + qs, false, function (items) {
+            if (!Array.isArray(items) || !items.length) return done([]);
+            done(mapRestItems(items));
+        }, function (xhr) {
+            logDebug('subdl fallback failed', xhr && xhr.status);
+            done([]);
+        }, { token: false });
     }
 
     function searchExternalSubs(data, done) {
@@ -1019,6 +1067,7 @@
             mapped.push({
                 stremio: true,
                 source: 'stremio-opensubtitles',
+                origin: item && item._source === 'subdl' ? 'subdl' : 'opensubtitles',
                 id: item.id || url,
                 url: url,
                 lang: lang.code,
@@ -1099,6 +1148,7 @@
                 stremio: true,
                 translated: true,
                 source: 'stremio-opensubtitles-translated',
+                origin: item && item._source === 'subdl' ? 'subdl' : 'opensubtitles',
                 id: item.id || url,
                 url: url,
                 sourceUrl: url,
@@ -1902,14 +1952,19 @@
         };
     }
 
+    function providerName(item) {
+        return item && item.origin === 'subdl' ? 'SubDL' : PLUGIN_TITLE;
+    }
+
     function createSubtitleItem(item, index) {
+        var label = providerName(item);
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
             index: index,
             language: item.lang || selectedLanguage().code,
-            label: PLUGIN_TITLE,
-            title: PLUGIN_TITLE,
+            label: label,
+            title: label,
             url: item.url,
             onSelect: function () {
                 renderer.select(sub);
@@ -1967,7 +2022,9 @@
     function createTranslatedSubtitleItem(item, index) {
         var sourceName = languageName(item.sourceLang);
         var target = selectedLanguage();
-        var baseTitle = item.native ? 'ИИ перевод встроенных с ' + sourceName : 'ИИ перевод с ' + sourceName;
+        var baseTitle = item.native
+            ? 'ИИ перевод встроенных с ' + sourceName
+            : 'ИИ перевод с ' + sourceName + ' (' + providerName(item) + ')';
         var label = baseTitle + translatedItemTitleSuffix(item);
         var sub = {
             stremio: true,

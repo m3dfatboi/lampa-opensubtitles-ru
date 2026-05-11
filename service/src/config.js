@@ -128,6 +128,10 @@ export function createConfig(rootDir = process.cwd()) {
       receiptEnabled: boolEnv('ROBOKASSA_RECEIPT_ENABLED', false),
       receiptSno: process.env.ROBOKASSA_RECEIPT_SNO || 'usn_income',
       receiptTax: process.env.ROBOKASSA_RECEIPT_TAX || 'none'
+    },
+    subdl: {
+      apiKey: (process.env.SUBDL_API_KEY || '').trim(),
+      timeoutMs: intEnv('SUBDL_TIMEOUT_MS', 15000)
     }
   };
 }

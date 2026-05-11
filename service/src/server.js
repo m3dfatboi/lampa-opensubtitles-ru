@@ -64,7 +64,7 @@ function paymentPage(title, text) {
 </html>`;
 }
 
-export function createServer(service, bot, config) {
+export function createServer(service, bot, config, subdl) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -112,6 +112,44 @@ export function createServer(service, bot, config) {
       const translationParams = routeMatch(url.pathname, '/v1/translations/:id');
       if (req.method === 'GET' && translationParams) {
         jsonResponse(res, 200, service.getTranslation(req.headers.authorization, translationParams.id, queryParams(url)), CORS);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/v1/external/subtitles/search') {
+        if (!subdl || !subdl.isConfigured()) {
+          jsonResponse(res, 200, [], CORS);
+          return;
+        }
+        const params = queryParams(url);
+        const languages = String(params.languages || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const items = await subdl.search({
+          imdb_id: params.imdb_id || '',
+          tmdb_id: params.tmdb_id || '',
+          query: params.query || '',
+          season: params.season || '',
+          episode: params.episode || '',
+          languages
+        });
+        jsonResponse(res, 200, subdl.toOpenSubtitlesShape(items), CORS);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/v1/external/subtitles/file') {
+        if (!subdl || !subdl.isConfigured()) {
+          jsonResponse(res, 503, { message: 'SubDL is not configured' }, CORS);
+          return;
+        }
+        const path = url.searchParams.get('path');
+        if (!path) {
+          jsonResponse(res, 400, { message: 'path required' }, CORS);
+          return;
+        }
+        const text = await subdl.fetchSrt(path);
+        res.writeHead(200, {
+          ...CORS,
+          'Content-Type': 'application/x-subrip; charset=utf-8'
+        });
+        res.end(text);
         return;
       }
 

@@ -5,14 +5,16 @@ import { createServer } from './server.js';
 import { LampaTranslateService } from './service.js';
 import { TelegramBot } from './bot.js';
 import { Translator } from './translator.js';
+import { Subdl } from './subdl.js';
 
 const config = createConfig(process.cwd());
 const store = new Store(config.dbPath, config);
 const translator = new Translator(config);
 const robokassa = new Robokassa(config);
+const subdl = new Subdl(config);
 const service = new LampaTranslateService({ config, store, translator, robokassa });
 const bot = new TelegramBot(config, service, store);
-const server = createServer(service, bot, config);
+const server = createServer(service, bot, config, subdl);
 
 service.queue.onJobComplete = (job) => bot.notifyAdminsOfTranslation(job);
 
@@ -24,6 +26,7 @@ server.listen(config.port, () => {
   console.log(`[service] public base URL: ${config.publicBaseUrl}`);
   console.log(`[service] telegram bot: ${bot.enabled ? 'enabled' : 'disabled'}`);
   console.log(`[service] robokassa: ${robokassa.isConfigured() ? 'configured' : 'not configured'}`);
+  console.log(`[service] subdl: ${subdl.isConfigured() ? 'configured' : 'not configured'}`);
 });
 
 function shutdown(signal) {

@@ -10,5 +10,8 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
   }
 }
