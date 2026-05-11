@@ -1745,9 +1745,20 @@
         return item;
     }
 
+    function separatorItem(title) {
+        return {
+            title: title,
+            separator: true,
+            index: -1,
+            stremio: true,
+            source: 'stremio-opensubtitles',
+            selected: false
+        };
+    }
+
     function searchItem() {
         var item = {
-            title: 'Поиск по названию',
+            title: 'Поиск по другой серии',
             index: -1,
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -1756,7 +1767,7 @@
                 if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
                     Lampa.PlayerVideo.subsview(true);
                 }
-                runTitleSearch();
+                promptManualOverride();
             }
         };
 
@@ -1778,6 +1789,14 @@
         });
 
         return item;
+    }
+
+    function rangeItems(count, current) {
+        var items = [];
+        for (var i = 1; i <= count; i++) {
+            items.push({ title: String(i), value: i, selected: i === current });
+        }
+        return items;
     }
 
     function returnToController(name) {
@@ -1821,266 +1840,45 @@
         return 'player_panel';
     }
 
-    function defaultSearchQuery() {
-        var card = activeCard(lastPlayerData);
-        var title = (card && (card.title || card.name)) || (lastPlayerData && lastPlayerData.title) || '';
-        title = String(title).trim();
-
-        if (isSeries(card, lastPlayerData)) {
-            var auto = parseEpisode(lastPlayerData || {});
-            var season = (manualOverride && manualOverride.season) || auto.season;
-            var episode = (manualOverride && manualOverride.episode) || auto.episode;
-            if (season && episode) {
-                var sePad = function (n) { return ('0' + n).slice(-2); };
-                title += ' S' + sePad(season) + 'E' + sePad(episode);
-            }
-        }
-
-        return title;
-    }
-
-    function formatSearchResultTitle(item) {
-        var name = String(item.MovieName || '').trim();
-        var year = String(item.MovieYear || '').trim();
-        var release = String(item.MovieReleaseName || '').trim();
-        var head = name + (year ? ' (' + year + ')' : '');
-        if (release) head += ' · ' + release;
-        return head || 'Без названия';
-    }
-
-    function formatSearchResultSubtitle(item) {
-        var parts = [];
-        if (item.SubLanguageID) parts.push(item.SubLanguageID);
-        if (item.SubFormat) parts.push(String(item.SubFormat).toUpperCase());
-        if (item.SubDownloadsCnt) parts.push(item.SubDownloadsCnt + ' скачиваний');
-        return parts.join(' · ');
-    }
-
-    function loadSearchedSubtitle(restItem) {
-        var mapped = mapRestItems([restItem]);
-        if (!mapped.length) {
-            notify(PLUGIN_TITLE + ': не удалось открыть субтитр');
-            return;
-        }
-
-        var raw = mapped[0];
-        var sub = {
-            stremio: true,
-            source: 'stremio-opensubtitles',
-            index: 999,
-            language: raw.lang || selectedLanguage().code,
-            label: PLUGIN_TITLE,
-            title: PLUGIN_TITLE,
-            url: raw.url
-        };
-
-        notify(PLUGIN_TITLE + ': загружаю выбранный субтитр...');
-        renderer.select(sub);
-    }
-
-    function showSearchResults(items, query, prevController) {
+    function promptManualOverride(prevController) {
         if (!Lampa.Select || !Lampa.Select.show) return;
 
-        var picker = items.filter(function (item) {
-            return item && item.IDSubtitleFile;
-        }).slice(0, 50).map(function (item) {
-            return {
-                title: formatSearchResultTitle(item),
-                subtitle: formatSearchResultSubtitle(item),
-                value: item
-            };
-        });
+        if (!prevController) prevController = captureController();
 
-        if (!picker.length) {
-            notify(PLUGIN_TITLE + ': ничего не найдено');
-            returnToController(prevController);
-            return;
-        }
+        var card = activeCard(lastPlayerData);
+        var auto = parseEpisode(lastPlayerData || {});
+        var currentSeason = (manualOverride && manualOverride.season) || auto.season || 1;
+        var currentEpisode = (manualOverride && manualOverride.episode) || auto.episode || 1;
+        var maxSeason = Math.max(card && card.number_of_seasons || 0, 25, currentSeason);
+        var maxEpisode = Math.max(currentEpisode + 50, 100);
 
         Lampa.Select.show({
-            title: 'Найдено для «' + query + '»',
-            items: picker,
+            title: 'Выберите сезон',
+            items: rangeItems(maxSeason, currentSeason),
             onBack: function () { returnToController(prevController); },
-            onSelect: function (chosen) {
-                returnToController(prevController);
-                loadSearchedSubtitle(chosen.value);
+            onSelect: function (seasonItem) {
+                Lampa.Select.show({
+                    title: 'Сезон ' + seasonItem.value + ' — выберите серию',
+                    items: rangeItems(maxEpisode, currentEpisode),
+                    onBack: function () { promptManualOverride(prevController); },
+                    onSelect: function (episodeItem) {
+                        returnToController(prevController);
+
+                        manualOverride = {
+                            type: 'series',
+                            season: seasonItem.value,
+                            episode: episodeItem.value
+                        };
+
+                        logDebug('manual override', manualOverride);
+
+                        notify('Поиск ' + selectedLanguage().name + ' для S' + seasonItem.value + 'E' + episodeItem.value + '...');
+
+                        if (lastPlayerData) searchFor(lastPlayerData);
+                    }
+                });
             }
         });
-    }
-
-    function performTitleSearch(query, prevController) {
-        var lang = selectedLanguage();
-        var url = 'https://rest.opensubtitles.org/search/query-' + encodeURIComponent(query) + '/sublanguageid-' + lang.code;
-        var net = new Lampa.Reguest();
-
-        notify(PLUGIN_TITLE + ': ищу «' + query + '»...');
-        logDebug('title search', url);
-
-        net.timeout(15000);
-        net.silent(url, function (items) {
-            if (!Array.isArray(items) || !items.length) {
-                notify(PLUGIN_TITLE + ': ничего не найдено по «' + query + '»');
-                returnToController(prevController);
-                return;
-            }
-            showSearchResults(items, query, prevController);
-        }, function (xhr) {
-            logDebug('title search error', xhr && xhr.status);
-            notify(PLUGIN_TITLE + ': ошибка поиска');
-            returnToController(prevController);
-        });
-    }
-
-    function ensureSearchInputStyles() {
-        if (typeof document === 'undefined' || !document.head) return;
-        if (document.getElementById('opensubtitles-ru-search-input-styles')) return;
-
-        var style = document.createElement('style');
-        style.id = 'opensubtitles-ru-search-input-styles';
-        style.textContent =
-            '.opensubtitles-ru-search-overlay{' +
-                'position:fixed;inset:0;z-index:2147483647;' +
-                'background:rgba(0,0,0,0.78);' +
-                'display:flex;align-items:center;justify-content:center;' +
-                'animation:opensubtitles-status-fade 0.18s ease-out;' +
-            '}' +
-            '.opensubtitles-ru-search-modal{' +
-                'background:#1a1f2b;color:#fff;border-radius:0.6em;' +
-                'padding:1.8em 2em;min-width:24em;max-width:90vw;' +
-                'box-shadow:0 1.5em 4em rgba(0,0,0,0.6);' +
-            '}' +
-            '.opensubtitles-ru-search-modal h3{' +
-                'margin:0 0 1em;font-size:1.2em;font-weight:600;' +
-            '}' +
-            '.opensubtitles-ru-search-modal input{' +
-                'width:100%;box-sizing:border-box;' +
-                'padding:0.7em 0.9em;font-size:1.05em;' +
-                'background:#0e1118;color:#fff;border:0.1em solid #2a3142;' +
-                'border-radius:0.35em;outline:none;' +
-            '}' +
-            '.opensubtitles-ru-search-modal input:focus{border-color:#7cc4ff}' +
-            '.opensubtitles-ru-search-buttons{' +
-                'display:flex;gap:0.6em;justify-content:flex-end;margin-top:1.2em;' +
-            '}' +
-            '.opensubtitles-ru-search-buttons button{' +
-                'padding:0.55em 1.4em;font-size:1em;' +
-                'border:0;border-radius:0.35em;cursor:pointer;' +
-                'background:#2a3142;color:#fff;' +
-            '}' +
-            '.opensubtitles-ru-search-buttons button.primary{' +
-                'background:#3b82f6;' +
-            '}';
-        document.head.appendChild(style);
-    }
-
-    function showTitleSearchInput(prevController) {
-        if (typeof document === 'undefined' || !document.body) return;
-
-        ensureSearchInputStyles();
-
-        var overlay = document.createElement('div');
-        overlay.className = 'opensubtitles-ru-search-overlay';
-        overlay.innerHTML =
-            '<div class="opensubtitles-ru-search-modal">' +
-                '<h3>Поиск субтитров по названию</h3>' +
-                '<input type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">' +
-                '<div class="opensubtitles-ru-search-buttons">' +
-                    '<button class="cancel">Отмена</button>' +
-                    '<button class="primary">Искать</button>' +
-                '</div>' +
-            '</div>';
-
-        var input = overlay.querySelector('input');
-        var btnGo = overlay.querySelector('button.primary');
-        var btnCancel = overlay.querySelector('button.cancel');
-
-        input.value = defaultSearchQuery();
-        document.body.appendChild(overlay);
-
-        try { input.focus(); input.select(); }
-        catch (e) {}
-
-        var closed = false;
-        function close(query) {
-            if (closed) return;
-            closed = true;
-            try { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
-            catch (e) {}
-            document.removeEventListener('keydown', onKey, true);
-
-            returnToController(prevController);
-            if (query) performTitleSearch(query, prevController);
-        }
-
-        function onKey(e) {
-            if (e.key === 'Escape' || e.keyCode === 27 || e.keyCode === 8) {
-                e.preventDefault();
-                e.stopPropagation();
-                close(null);
-            }
-            else if (e.key === 'Enter' || e.keyCode === 13) {
-                e.preventDefault();
-                e.stopPropagation();
-                close(String(input.value || '').trim());
-            }
-        }
-
-        btnGo.addEventListener('click', function () { close(String(input.value || '').trim()); });
-        btnCancel.addEventListener('click', function () { close(null); });
-
-        setTimeout(function () {
-            if (closed) return;
-            overlay.addEventListener('click', function (e) {
-                if (e.target === overlay) close(null);
-            });
-            document.addEventListener('keydown', onKey, true);
-        }, 300);
-    }
-
-    function isIosPlatform() {
-        try { return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; }
-        catch (e) { return false; }
-    }
-
-    function useLampaNativeInput(prevController) {
-        if (!Lampa.Input || typeof Lampa.Input.edit !== 'function') return false;
-
-        var defaultQuery = defaultSearchQuery();
-        var done = false;
-
-        try {
-            Lampa.Input.edit({
-                free: true,
-                title: 'Поиск субтитров',
-                value: defaultQuery,
-                nosave: true
-            }, function (query) {
-                if (done) return;
-                done = true;
-                query = String(query || '').trim();
-                returnToController(prevController);
-                if (query) performTitleSearch(query, prevController);
-            }, function () {
-                if (done) return;
-                done = true;
-                returnToController(prevController);
-            });
-            return true;
-        }
-        catch (e) {
-            logDebug('Lampa.Input.edit failed', e && e.message);
-            return false;
-        }
-    }
-
-    function runTitleSearch() {
-        if (!Lampa.Select || !Lampa.Select.show) return;
-        var prevController = captureController();
-
-        setTimeout(function () {
-            if (!isIosPlatform() && useLampaNativeInput(prevController)) return;
-            showTitleSearchInput(prevController);
-        }, 200);
     }
 
     function statusSubtitle(index) {
@@ -2592,7 +2390,10 @@
             if (status) mixed.push(status);
         }
 
-        mixed.push(searchItem());
+        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
+            mixed.push(separatorItem(PLUGIN_TITLE));
+            mixed.push(searchItem());
+        }
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' nativeTranslated=' + nativeTranslated.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
