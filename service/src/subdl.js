@@ -45,25 +45,42 @@ export class Subdl {
   async search(params) {
     if (!this.isConfigured()) return [];
 
-    const identifiers = [];
-    if (params.imdb_id) identifiers.push({ key: 'imdb_id', value: params.imdb_id });
-    if (params.tmdb_id) identifiers.push({ key: 'tmdb_id', value: params.tmdb_id });
-    if (params.query) identifiers.push({ key: 'film_name', value: params.query });
-    if (!identifiers.length) return [];
-
     const languages = (params.languages || [])
       .map(toIso639_1Upper)
       .filter(Boolean);
 
     let subs = [];
-    // На SubDL аниме часто заведено под отдельным IMDb id для каждого сезона, поэтому
-    // если запрос по imdb_id вернул пусто — повторяем с tmdb_id, а затем с названием.
-    for (const id of identifiers) {
-      const fetched = await this.fetchSubtitles(id.key, id.value, params, languages);
-      if (fetched.length) {
-        subs = fetched;
-        break;
+    let resolvedImdb = '';
+
+    // 1) Пробуем то, что нам дали (imdb_id → tmdb_id), и заодно запоминаем, удалось ли
+    //    кому-то ответить непустым списком.
+    if (params.imdb_id) {
+      const res = await this.fetchOnce('imdb_id', params.imdb_id, params, languages);
+      if (res.subtitles.length) subs = res.subtitles;
+    }
+    if (!subs.length && params.tmdb_id) {
+      const res = await this.fetchOnce('tmdb_id', params.tmdb_id, params, languages);
+      if (res.subtitles.length) subs = res.subtitles;
+    }
+
+    // 2) Если до сих пор пусто, но есть название — делаем title-поиск без фильтров,
+    //    чтобы получить sd_id/imdb_id шоу, и повторяем запрос по этому imdb_id.
+    //    Это особенно важно для аниме: SubDL заводит каждый сезон под своим imdb,
+    //    а Lampa/TMDB иногда отдают совсем другой id.
+    if (!subs.length && params.query) {
+      const res = await this.fetchOnce('film_name', params.query, { season: '', episode: '' }, languages);
+      const candidates = (res.results || []).filter((r) => r && r.imdb_id);
+      const tvOnly = candidates.filter((r) => r.type === 'tv');
+      const byTmdb = params.tmdb_id ? candidates.find((r) => String(r.tmdb_id || '') === String(params.tmdb_id)) : null;
+      const best = byTmdb || tvOnly[0] || candidates[0];
+
+      if (best && best.imdb_id && best.imdb_id !== params.imdb_id) {
+        resolvedImdb = best.imdb_id;
+        const retry = await this.fetchOnce('imdb_id', best.imdb_id, params, languages);
+        if (retry.subtitles.length) subs = retry.subtitles;
       }
+      // Если показ не нашёлся, отдаём хоть что-то из title-поиска.
+      if (!subs.length) subs = res.subtitles;
     }
 
     if (params.episode && subs.length) {
@@ -76,15 +93,19 @@ export class Subdl {
         if (ep == null || ep === '') return true;
         return Number(ep) === wantEp;
       });
-      // Если фильтр по сезону/эпизоду всё выкинул, оставляем хотя бы то что нашли —
-      // на SubDL у аниме часто странная нумерация сезонов, лучше показать что есть.
+      // На аниме нумерация сезонов часто странная; если фильтр всё убил — отдаём raw.
       subs = filtered.length ? filtered : subs;
+    }
+
+    if (resolvedImdb) {
+      // Полезно для дебага: видно, что мы дотащились до правильного шоу не сразу.
+      subs.forEach((s) => { if (s && !s._resolved_imdb) s._resolved_imdb = resolvedImdb; });
     }
 
     return subs;
   }
 
-  async fetchSubtitles(identifierKey, identifierValue, params, languages) {
+  async fetchOnce(identifierKey, identifierValue, params, languages) {
     const url = new URL(SEARCH_URL);
     url.searchParams.set('api_key', this.apiKey);
     url.searchParams.set('subs_per_page', '30');
@@ -107,8 +128,11 @@ export class Subdl {
       clearTimeout(timer);
     }
 
-    if (!json || json.status !== true) return [];
-    return Array.isArray(json.subtitles) ? json.subtitles : [];
+    if (!json || json.status !== true) return { subtitles: [], results: [] };
+    return {
+      subtitles: Array.isArray(json.subtitles) ? json.subtitles : [],
+      results: Array.isArray(json.results) ? json.results : []
+    };
   }
 
   toOpenSubtitlesShape(items, context) {

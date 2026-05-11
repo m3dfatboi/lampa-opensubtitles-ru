@@ -142,3 +142,53 @@ test('Subdl.search filters API results by requested episode', async () => {
     assert.deepEqual(eps.sort(), [20, 20, null]);
   });
 });
+
+test('Subdl.search retries via title when imdb_id is wrong', async () => {
+  const subdl = testSubdl();
+  const calls = [];
+  const stub = async (url) => {
+    calls.push(url);
+    const u = new URL(url);
+    if (u.searchParams.get('imdb_id') === 'tt-wrong') {
+      return { ok: true, status: 200, json: async () => ({ status: true, subtitles: [] }) };
+    }
+    if (u.searchParams.get('film_name')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: true,
+          results: [
+            { sd_id: 999, type: 'tv', name: 'Some Anime', imdb_id: 'tt-real', tmdb_id: 82684 }
+          ],
+          subtitles: []
+        })
+      };
+    }
+    if (u.searchParams.get('imdb_id') === 'tt-real') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: true,
+          subtitles: [{ url: '/real.zip', episode: 1, season: 3, lang: 'en' }]
+        })
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ status: true, subtitles: [] }) };
+  };
+  await withFetchStub(stub, async () => {
+    const out = await subdl.search({
+      imdb_id: 'tt-wrong',
+      query: 'Some Anime',
+      season: 3,
+      episode: 1,
+      languages: ['eng']
+    });
+    assert.equal(out.length, 1);
+    assert.equal(out[0].url, '/real.zip');
+    assert.equal(out[0]._resolved_imdb, 'tt-real');
+    // Should hit: wrong imdb (empty), film_name (resolves imdb), then real imdb (subs).
+    assert.equal(calls.length, 3);
+  });
+});
