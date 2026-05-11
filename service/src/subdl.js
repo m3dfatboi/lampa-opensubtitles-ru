@@ -122,10 +122,95 @@ export class Subdl {
 
     const zip = new AdmZip(buffer);
     const entries = zip.getEntries().filter((e) => !e.isDirectory);
-    const srt = entries.find((e) => /\.srt$/i.test(e.entryName)) || entries.find((e) => /\.vtt$/i.test(e.entryName));
-    if (!srt) throw new HttpError(502, 'No subtitle file inside SubDL archive');
 
-    const raw = srt.getData();
-    return raw.toString('utf8');
+    const srt = entries.find((e) => /\.srt$/i.test(e.entryName));
+    if (srt) return srt.getData().toString('utf8');
+
+    const vtt = entries.find((e) => /\.vtt$/i.test(e.entryName));
+    if (vtt) return vtt.getData().toString('utf8');
+
+    const ass = entries.find((e) => /\.(ass|ssa)$/i.test(e.entryName));
+    if (ass) return convertAssToSrt(ass.getData().toString('utf8'));
+
+    throw new HttpError(502, 'No supported subtitle file inside SubDL archive');
   }
+}
+
+function assTimeToSrt(t) {
+  const match = String(t || '').trim().match(/^(\d+):(\d{1,2}):(\d{1,2})\.(\d{1,3})$/);
+  if (!match) return '00:00:00,000';
+  const h = match[1].padStart(2, '0');
+  const m = match[2].padStart(2, '0');
+  const s = match[3].padStart(2, '0');
+  const ms = (match[4] + '000').slice(0, 3);
+  return `${h}:${m}:${s},${ms}`;
+}
+
+function cleanAssText(text) {
+  return String(text || '')
+    .replace(/\{[^}]*\}/g, '')
+    .replace(/\\N/g, '\n')
+    .replace(/\\n/gi, '\n')
+    .replace(/\\h/g, ' ')
+    .trim();
+}
+
+export function convertAssToSrt(assText) {
+  const lines = String(assText || '').split(/\r?\n/);
+  const dialogues = [];
+  let format = null;
+  let startIdx = 1;
+  let endIdx = 2;
+  let textIdx = 9;
+
+  for (const line of lines) {
+    if (line.startsWith('Format:') && format === null) {
+      const fields = line.substring(7).split(',').map((s) => s.trim().toLowerCase());
+      const fmtStart = fields.indexOf('start');
+      const fmtEnd = fields.indexOf('end');
+      const fmtText = fields.indexOf('text');
+      if (fmtStart >= 0) startIdx = fmtStart;
+      if (fmtEnd >= 0) endIdx = fmtEnd;
+      if (fmtText >= 0) textIdx = fmtText;
+      format = fields;
+      continue;
+    }
+    if (!line.startsWith('Dialogue:')) continue;
+
+    const parts = line.substring(9).split(',');
+    if (parts.length < Math.max(startIdx, endIdx, textIdx) + 1) continue;
+
+    const start = parts[startIdx];
+    const end = parts[endIdx];
+    const text = cleanAssText(parts.slice(textIdx).join(','));
+    if (!text) continue;
+
+    dialogues.push({
+      startMs: assTimeToMs(start),
+      start: assTimeToSrt(start),
+      end: assTimeToSrt(end),
+      text
+    });
+  }
+
+  dialogues.sort((a, b) => a.startMs - b.startMs);
+
+  const out = [];
+  for (let i = 0; i < dialogues.length; i++) {
+    out.push(String(i + 1));
+    out.push(`${dialogues[i].start} --> ${dialogues[i].end}`);
+    out.push(dialogues[i].text);
+    out.push('');
+  }
+  return out.join('\n');
+}
+
+function assTimeToMs(t) {
+  const match = String(t || '').trim().match(/^(\d+):(\d{1,2}):(\d{1,2})\.(\d{1,3})$/);
+  if (!match) return 0;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  const s = Number(match[3]);
+  const cs = Number((match[4] + '00').slice(0, 3));
+  return ((h * 3600) + (m * 60) + s) * 1000 + cs;
 }
