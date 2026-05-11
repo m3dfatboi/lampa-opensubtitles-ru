@@ -3624,7 +3624,58 @@
     function parseSubtitles(raw) {
         raw = (raw || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
+        if (/^\s*\[Script Info\]/i.test(raw) || /^\s*\[V4\+? Styles\]/im.test(raw) || /^Dialogue:/m.test(raw)) {
+            return parseAssBlocks(raw);
+        }
+
         return parseByBlocks(raw, /^\s*WEBVTT/i.test(raw));
+    }
+
+    function parseAssBlocks(raw) {
+        var lines = raw.split('\n');
+        var cues = [];
+        var startIdx = 1, endIdx = 2, textIdx = 9;
+        var formatSeen = false;
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (!formatSeen && /^Format:/i.test(line) && /\b(start|end|text)\b/i.test(line)) {
+                var fields = line.substring(7).split(',').map(function (s) { return s.trim().toLowerCase(); });
+                var fs = fields.indexOf('start');
+                var fe = fields.indexOf('end');
+                var ft = fields.indexOf('text');
+                if (fs >= 0) startIdx = fs;
+                if (fe >= 0) endIdx = fe;
+                if (ft >= 0) textIdx = ft;
+                formatSeen = true;
+                continue;
+            }
+            if (!/^Dialogue:/i.test(line)) continue;
+            var parts = line.substring(9).split(',');
+            if (parts.length < Math.max(startIdx, endIdx, textIdx) + 1) continue;
+            var text = parts.slice(textIdx).join(',').trim();
+            text = text
+                .replace(/\{[^}]*\}/g, '')
+                .replace(/\\N/g, '\n')
+                .replace(/\\n/gi, '\n')
+                .replace(/\\h/g, ' ')
+                .trim();
+            if (!text) continue;
+            cues.push({
+                start: assTimeMs(parts[startIdx]),
+                end: assTimeMs(parts[endIdx]),
+                text: cleanSubtitleText(text)
+            });
+        }
+
+        cues.sort(function (a, b) { return a.start - b.start; });
+        return cues.filter(function (cue) { return cue.end > cue.start && cue.text; });
+    }
+
+    function assTimeMs(t) {
+        var match = String(t || '').trim().match(/^(\d+):(\d{1,2}):(\d{1,2})\.(\d{1,3})$/);
+        if (!match) return 0;
+        return (Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000 + Number((match[4] + '00').slice(0, 3));
     }
 
     function parseByBlocks(raw, isVtt) {
