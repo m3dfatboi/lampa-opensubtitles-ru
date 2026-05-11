@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v13-auto-select-translated';
+    var PLUGIN_VERSION = 'v14-anime-torrent-mismatch';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -682,8 +682,8 @@
     }
 
     function parseEpisode(data) {
-        var season = data && (data.season || data.season_number);
-        var episode = data && (data.episode || data.episode_number);
+        var dataSeason = parseInt((data && (data.season || data.season_number)) || 0, 10) || 0;
+        var dataEpisode = parseInt((data && (data.episode || data.episode_number)) || 0, 10) || 0;
         var titleText = String((data && data.title) || '');
         // Берём ВСЕ доступные пути одновременно — для многосерийных торрентов сезон
         // обычно сидит в названии родительского каталога, а fname это просто "01.mkv".
@@ -696,57 +696,61 @@
         var resolutionStripped = (titleText + ' ' + fileText)
             .replace(/\b\d{3,4}x\d{3,4}\b/gi, ' ');
         var match;
+        var fileSeason = 0;
+        var fileEpisode = 0;
 
-        if (!season || !episode) {
-            match = resolutionStripped.match(/[Ss](\d{1,2})[ ._-]*[Ee](\d{1,3})/);
-            if (match) {
-                season = season || parseInt(match[1], 10);
-                episode = episode || parseInt(match[2], 10);
-            }
+        match = resolutionStripped.match(/[Ss](\d{1,2})[ ._-]*[Ee](\d{1,3})/);
+        if (match) {
+            fileSeason = parseInt(match[1], 10);
+            fileEpisode = parseInt(match[2], 10);
         }
 
-        if (!season || !episode) {
+        if (!fileSeason || !fileEpisode) {
             match = resolutionStripped.match(/(?:^|[^\d])(\d{1,2})x(\d{1,3})(?!\d)/i);
             if (match) {
-                season = season || parseInt(match[1], 10);
-                episode = episode || parseInt(match[2], 10);
+                fileSeason = fileSeason || parseInt(match[1], 10);
+                fileEpisode = fileEpisode || parseInt(match[2], 10);
             }
         }
 
-        // Сезон из текста: "Season 3", "3rd Season", "Сезон 3", "S03".
-        // Смотрим и в title, и во ВЕСЬ путь файла — "3rd Season" может сидеть в родительском
-        // каталоге торрента, а в самом .mkv-имени уже только номер эпизода.
-        if (!season) {
+        // Сезон из текста: "Season 3", "3rd Season", "Сезон 3", "S03". И title, и весь путь.
+        if (!fileSeason) {
             var seasonText = titleText + ' ' + fileText;
             match = seasonText.match(/(?:season|сезон)\s*(\d{1,2})\b/i)
                 || seasonText.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
                 || seasonText.match(/(?:^|[^A-Za-z\d])S(\d{1,2})(?:[^A-Za-z\d]|$)/);
             if (match) {
                 var maybeSeason = parseInt(match[1], 10);
-                if (maybeSeason > 0 && maybeSeason < 30) season = maybeSeason;
+                if (maybeSeason > 0 && maybeSeason < 30) fileSeason = maybeSeason;
             }
         }
 
         // Эпизод из имени файла: "01.mkv", "[Group] 01 [tag].mkv", "Title - 01.mkv", "Title 01v2.mkv".
-        if (!episode) {
+        if (!fileEpisode) {
             var basename = fileText.replace(/^.*[\/\\]/, '').replace(/\.[a-z0-9]{2,4}$/i, '');
-            // Сначала убираем все [теги] и (теги), чтобы внутренние числа (1080, 1920, год) не мешали.
             var stripped = basename.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
             match = stripped.match(/(?:^|[\s_\-.])(\d{1,3})(?:v\d)?(?=[\s_\-.]|$)/);
             if (match) {
                 var maybeEpisode = parseInt(match[1], 10);
-                if (maybeEpisode > 0 && maybeEpisode < 1000) episode = maybeEpisode;
+                if (maybeEpisode > 0 && maybeEpisode < 1000) fileEpisode = maybeEpisode;
             }
         }
 
-        // Если эпизод нашли, а сезон нет — почти всегда это сезон 1
-        // (для аниме часто нет S01 в названии релиза).
-        if (episode && !season) season = 1;
+        // Эпизод нашли, а сезон нет — почти всегда сезон 1 (типично для аниме первого сезона).
+        if (fileEpisode && !fileSeason) fileSeason = 1;
 
-        return {
-            season: parseInt(season || 0, 10) || 0,
-            episode: parseInt(episode || 0, 10) || 0
-        };
+        // Приоритет: если из имени файла достали что-то осмысленное — используем именно его.
+        // Lampa для movie-карточек прокидывает data.season=1, data.episode=1 как дефолты,
+        // и они полностью перекрывают реальные значения из торрента-сериала. Поэтому
+        // file-extracted данные имеют приоритет.
+        if (fileSeason || fileEpisode) {
+            return {
+                season: fileSeason || dataSeason || 0,
+                episode: fileEpisode || dataEpisode || 0
+            };
+        }
+
+        return { season: dataSeason, episode: dataEpisode };
     }
 
     function cleanShowName(text) {
@@ -761,6 +765,9 @@
         base = base.replace(/\b(720p|1080p|2160p|4k|bdrip|bluray|webrip|webdl|hdtv|hevc|h264|h265|x264|x265|10bit|flac|aac|ac3|dts|multi|dual|dub|sub|raw|ova|oad|movie|complete)\b.*/gi, '');
         base = base.replace(/\b\d{3,4}x\d{3,4}\b.*/i, '');
         base = base.replace(/\b(?:19|20)\d{2}\b/g, '');
+        // Хвостовой "3rd" / "2nd" / "1st" / "4th" без "Season" — обычно остаток от
+        // обрезанного "3rd Season". Срезаем, если оно последнее слово.
+        base = base.replace(/\s+\d{1,2}(?:st|nd|rd|th)\s*$/i, '');
         base = base.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
         base = base.replace(/^[-:\s]+|[-:\s]+$/g, '');
         if (base.length < 3 || /^\d+$/.test(base)) return '';
