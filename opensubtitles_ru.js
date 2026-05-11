@@ -652,6 +652,29 @@
     }
 
     function isSeries(card, data) {
+        // Явные признаки фильма (TMDB / Lampa.Activity / URL ?media=movie). Они должны выигрывать
+        // у эвристики "у card.name значит сериал", иначе мы насильно тащим фильм через серийную
+        // ветку и шлём в SubDL фиктивные season=1/episode=1.
+        if (card) {
+            if (card.media_type === 'movie') return false;
+            if (card.media_type === 'tv') return true;
+            if (card.first_air_date && !card.release_date) return true;
+            if (card.release_date && !card.first_air_date && !card.number_of_seasons) return false;
+            if (card.number_of_seasons) return true;
+        }
+        if (data) {
+            if (data.media === 'movie' || data.movie_type === 'movie') return false;
+            if (data.media === 'tv' || data.movie_type === 'tv') return true;
+        }
+        try {
+            var activity = Lampa.Activity && Lampa.Activity.active ? Lampa.Activity.active() : null;
+            if (activity) {
+                if (activity.media === 'movie' || activity.movie_type === 'movie') return false;
+                if (activity.media === 'tv' || activity.movie_type === 'tv') return true;
+            }
+        }
+        catch (e) {}
+
         return Boolean(
             (card && (card.name || card.original_name || card.number_of_seasons)) ||
             (data && (data.season || data.episode || data.season_number || data.episode_number))
@@ -663,6 +686,8 @@
         var episode = data && (data.episode || data.episode_number);
         var titleText = String((data && data.title) || '');
         var fileText = String((data && (data.fname || data.path || data.url)) || '');
+        try { titleText = decodeURIComponent(titleText); } catch (e) {}
+        try { fileText = decodeURIComponent(fileText); } catch (e) {}
         // Не дай резрешению вроде "1920x1080" или "1280x720" попасть в матч N×N.
         var resolutionStripped = (titleText + ' ' + fileText)
             .replace(/\b\d{3,4}x\d{3,4}\b/gi, ' ');
@@ -685,10 +710,12 @@
         }
 
         // Сезон из текста: "Season 3", "3rd Season", "Сезон 3", "S03".
+        // Смотрим и в title, и в имя файла — для торрентов часто season живёт в URL/пути.
         if (!season) {
-            match = titleText.match(/(?:season|сезон)\s*(\d{1,2})\b/i)
-                || titleText.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
-                || titleText.match(/(?:^|[^A-Za-z\d])S(\d{1,2})(?:[^A-Za-z\d]|$)/);
+            var seasonText = (titleText + ' ' + fileText.replace(/^.*[\/\\]/, ''));
+            match = seasonText.match(/(?:season|сезон)\s*(\d{1,2})\b/i)
+                || seasonText.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
+                || seasonText.match(/(?:^|[^A-Za-z\d])S(\d{1,2})(?:[^A-Za-z\d]|$)/);
             if (match) {
                 var maybeSeason = parseInt(match[1], 10);
                 if (maybeSeason > 0 && maybeSeason < 30) season = maybeSeason;
@@ -715,6 +742,38 @@
             season: parseInt(season || 0, 10) || 0,
             episode: parseInt(episode || 0, 10) || 0
         };
+    }
+
+    // Достаём очищенное имя шоу из имени файла / торрента. Помогает в кейсах, когда
+    // Lampa сматчила контент с не той карточкой TMDB (типичная история для аниме), но
+    // имя файла само по себе содержит полный тайтл шоу.
+    // Файловые источники имеют приоритет над card.title — если у нас есть имя из URL
+    // или fname, оно почти всегда точнее, чем то, что подсунула Lampa.
+    function extractShowFromFilename(data) {
+        if (!data) return '';
+        // Порядок важен: файл/путь/url раньше title.
+        var sources = [data.fname, data.path, data.url, data.title].filter(Boolean);
+        for (var i = 0; i < sources.length; i++) {
+            var raw = String(sources[i] || '');
+            try { raw = decodeURIComponent(raw); } catch (e) {}
+            var base = raw.replace(/^.*[\/\\]/, '').replace(/\.[a-z0-9]{2,4}$/i, '');
+            base = base.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+            base = base.replace(/\b(?:season|сезон)\s*\d+.*/i, '');
+            base = base.replace(/\b\d{1,2}(?:st|nd|rd|th)\s*season.*/i, '');
+            base = base.replace(/\bs\d{1,2}(?:\s*e\d{1,3})?\b.*/i, '');
+            base = base.replace(/\b\d{1,2}x\d{1,3}\b.*/i, '');
+            base = base.replace(/\bpart\s*\d+\b.*/i, '');
+            base = base.replace(/\s+-\s+\d{1,3}(?:v\d)?(\s.*)?$/i, '');
+            base = base.replace(/\b(720p|1080p|2160p|4k|bdrip|bluray|webrip|webdl|hdtv|hevc|h264|h265|x264|x265|10bit|flac|aac|ac3|dts|multi|dual|dub|sub|raw|ova|oad|movie|complete)\b.*/gi, '');
+            base = base.replace(/\b\d{3,4}x\d{3,4}\b.*/i, '');
+            base = base.replace(/\b(?:19|20)\d{2}\b/g, '');
+            base = base.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
+            base = base.replace(/^[-:\s]+|[-:\s]+$/g, '');
+            // Файл с одним только номером ("01") — не имя шоу.
+            if (base.length < 3 || /^\d+$/.test(base)) continue;
+            return base;
+        }
+        return '';
     }
 
     function normalizeImdb(imdb) {
@@ -1003,8 +1062,10 @@
         var season = parts[1] || '';
         var episode = parts[2] || '';
 
-        // Если в request не было сезона/эпизода (например IMDb не нашли — request=null),
-        // подтягиваем из ручного override или из данных плеера.
+        // Всегда пытаемся вытащить season/episode из имени файла / override — даже если
+        // Lampa считает контент фильмом. Часто медиатип в Lampa не совпадает с реальным
+        // содержимым торрента (фильм-карточка → файл серии). SubDL устойчив к лишним
+        // season/episode на фильмовых сабах (если у саба нет episode, фильтр его пропустит).
         if (!season || !episode) {
             if (manualOverride) {
                 season = season || manualOverride.season || '';
@@ -1018,7 +1079,12 @@
         }
 
         var tmdbId = (card && card.id) || '';
-        var queryTitle = (card && (card.name || card.original_name || card.title || card.original_title)) || '';
+        // Берём имя из файла (часто это правильный show name), а если ничего полезного нет —
+        // падаем на card.title/name. Имя из файла часто точнее, если Lampa сматчила контент
+        // с не той карточкой (типичный случай для аниме-релизов).
+        var filenameShow = extractShowFromFilename(lastPlayerData);
+        var cardTitle = (card && (card.name || card.original_name || card.title || card.original_title)) || '';
+        var queryTitle = filenameShow || cardTitle;
 
         if (!imdbId && !tmdbId && !queryTitle) {
             logDebug('subdl fallback skipped — no imdb/tmdb/title');
