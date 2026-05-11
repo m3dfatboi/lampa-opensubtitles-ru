@@ -2110,7 +2110,7 @@
 
             if (status === true && playerOpened) {
                 setSubsContainerHidden(false);
-                if (renderer.current && Date.now() - ourLastPickAt > 500 && !actionWasPicked) {
+                if (!renderer.internalSubsviewCall && renderer.current && Date.now() - ourLastPickAt > 500 && !actionWasPicked) {
                     logDebug('subsview enabled but our pick is stale → other sub picked, disabling renderer');
                     renderer.disable();
                 }
@@ -3435,7 +3435,9 @@
             catch (e) { logDebug('renderer.start install panel error', e && e.message); }
 
             if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
+                self.internalSubsviewCall = true;
                 try { Lampa.PlayerVideo.subsview(true); } catch (e) {}
+                self.internalSubsviewCall = false;
             }
 
             silenceNativeTextTracks();
