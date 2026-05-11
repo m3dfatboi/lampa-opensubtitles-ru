@@ -2069,6 +2069,8 @@
                 }
             }
 
+            if (status === true) setSubsContainerHidden(false);
+
             return original.call(this, status);
         };
 
