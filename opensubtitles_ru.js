@@ -1725,8 +1725,8 @@
         Object.defineProperty(item, 'mode', {
             configurable: true,
             set: function (value) {
-                if (playerClosing) return;
                 if (value !== 'showing') return;
+                playerClosing = false;
                 if (renderer.current) {
                     logDebug('disabled picked: stopping renderer');
                     renderer.disable();
@@ -1927,14 +1927,13 @@
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (playerClosing) return;
                 if (value === 'showing') {
+                    playerClosing = false;
                     ourLastPickAt = Date.now();
                     renderer.select(sub);
                 }
             },
             get: function () {
-                if (playerClosing) return 'disabled';
                 return renderer.current && renderer.current.url === sub.url && !renderer.current.translated ? 'showing' : 'disabled';
             }
         });
@@ -2004,14 +2003,13 @@
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (playerClosing) return;
                 if (value === 'showing') {
+                    playerClosing = false;
                     ourLastPickAt = Date.now();
                     renderer.selectTranslated(sub);
                 }
             },
             get: function () {
-                if (playerClosing) return 'disabled';
                 return renderer.current && renderer.current.url === sub.url && renderer.current.translated ? 'showing' : 'disabled';
             }
         });
@@ -2085,11 +2083,11 @@
             var picked;
             logDebug('Lampa.PlayerVideo.subsview status=' + status + ' actionPicked=' + actionWasPicked + ' rendererActive=' + (!!renderer.current));
 
-            if (playerClosing) {
+            var playerOpened = Lampa.Player && typeof Lampa.Player.opened === 'function' ? Lampa.Player.opened() : true;
+
+            if (!playerOpened) {
                 return original.call(this, status);
             }
-
-            var playerOpened = Lampa.Player && typeof Lampa.Player.opened === 'function' ? Lampa.Player.opened() : true;
 
             if (status === false && renderer.current && !actionWasPicked && playerOpened) {
                 picked = selectedPanelItem();
@@ -3665,6 +3663,7 @@
 
     function destroyPlayer() {
         activePlayerId++;
+        playerClosing = false;
         lastKnownSubs = [];
         lastPlayerData = null;
         stremioSubs = [];
