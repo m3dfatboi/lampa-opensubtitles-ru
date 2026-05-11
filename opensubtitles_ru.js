@@ -73,6 +73,7 @@
     var nativeSubsSeen = false;
     var manualOverride = null;
     var actionWasPicked = false;
+    var ourLastPickAt = 0;
     var latestPanelSubs = [];
     var translationMemory = {};
     var translationPending = {};
@@ -1944,7 +1945,10 @@
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (value === 'showing') renderer.select(sub);
+                if (value === 'showing') {
+                    ourLastPickAt = Date.now();
+                    renderer.select(sub);
+                }
             },
             get: function () {
                 return renderer.current && renderer.current.url === sub.url && !renderer.current.translated ? 'showing' : 'disabled';
@@ -2016,7 +2020,10 @@
         Object.defineProperty(sub, 'mode', {
             configurable: true,
             set: function (value) {
-                if (value === 'showing') renderer.selectTranslated(sub);
+                if (value === 'showing') {
+                    ourLastPickAt = Date.now();
+                    renderer.selectTranslated(sub);
+                }
             },
             get: function () {
                 return renderer.current && renderer.current.url === sub.url && renderer.current.translated ? 'showing' : 'disabled';
@@ -2109,7 +2116,13 @@
                 }
             }
 
-            if (status === true) setSubsContainerHidden(false);
+            if (status === true) {
+                setSubsContainerHidden(false);
+                if (renderer.current && Date.now() - ourLastPickAt > 500 && !actionWasPicked) {
+                    logDebug('subsview enabled but our pick is stale → other sub picked, disabling renderer');
+                    renderer.disable();
+                }
+            }
 
             return original.call(this, status);
         };
