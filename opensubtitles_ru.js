@@ -3485,14 +3485,16 @@
 
             logDebug('renderer.start: timer fires every 50ms');
 
-            try { installToPanel(); }
-            catch (e) { logDebug('renderer.start install panel error', e && e.message); }
-
             if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
                 self.internalSubsviewCall = true;
                 try { Lampa.PlayerVideo.subsview(true); } catch (e) {}
                 self.internalSubsviewCall = false;
             }
+
+            setTimeout(function () {
+                try { installToPanel(); }
+                catch (e) { logDebug('renderer.start install panel error', e && e.message); }
+            }, 200);
 
             silenceNativeTextTracks();
             setSubsContainerHidden(false);
