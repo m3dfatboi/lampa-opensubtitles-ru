@@ -1224,13 +1224,9 @@
     }
 
     function nativeItemUrl(item) {
-        if (!item) return '';
-        var url = item.url || item.src || item.file || item.path ||
-                  item.link || item.download || item.href || item.subUrl ||
-                  item.subtitleUrl || item.SubDownloadLink;
+        var url = item && (item.url || item.src || item.file || item.path);
 
-        if (!url || typeof url !== 'string') return '';
-        if (/^native:\/\//i.test(url)) return '';
+        if (!url || /^native:\/\//i.test(url)) return '';
 
         return url;
     }
@@ -1564,21 +1560,10 @@
             var readable;
             var identity;
 
-            if (!item || isOurSub(item) || !sourceLang || sourceLang === target.code || rank >= 999) {
-                logDebug('skip native candidate', index, 'lang=' + sourceLang, 'rank=' + rank, 'isOur=' + isOurSub(item));
-                return;
-            }
+            if (!item || isOurSub(item) || !sourceLang || sourceLang === target.code || rank >= 999) return;
 
-            readable = readableNativeSource(item) || { cues: [], text: '', url: '' };
-
-            logDebug('native candidate', index, {
-                lang: sourceLang,
-                rank: rank,
-                cues: readable.cues.length,
-                text: readable.text ? readable.text.length : 0,
-                url: readable.url || '(none)',
-                item_keys: item ? Object.keys(item) : []
-            });
+            readable = readableNativeSource(item);
+            if (!readable) return;
 
             identity = nativeItemIdentity(item, index, readable.cues);
             if (seen[identity]) return;
