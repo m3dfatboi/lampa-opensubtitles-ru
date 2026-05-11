@@ -76,17 +76,36 @@ export class Subdl {
     }
 
     if (!json || json.status !== true) return [];
-    return Array.isArray(json.subtitles) ? json.subtitles : [];
+    let subs = Array.isArray(json.subtitles) ? json.subtitles : [];
+
+    if (params.episode) {
+      const wantEp = Number(params.episode);
+      const wantSe = Number(params.season || 0);
+      subs = subs.filter((s) => {
+        const ep = s.episode;
+        const se = s.season;
+        if (wantSe && se != null && se !== '' && Number(se) !== wantSe) return false;
+        if (ep == null || ep === '') return true;
+        return Number(ep) === wantEp;
+      });
+    }
+
+    return subs;
   }
 
-  toOpenSubtitlesShape(items) {
+  toOpenSubtitlesShape(items, context) {
+    const ctx = context || {};
     return (items || []).map((item, index) => {
       const path = String(item.url || '').trim();
       if (!path) return null;
 
       const id = 'subdl-' + (item.sd_id || item.subtitlePage || (path + '#' + index));
       const lang = toIso639_2(item.lang || item.language);
-      const downloadProxy = this.publicBaseUrl + '/v1/external/subtitles/file?path=' + encodeURIComponent(path);
+      const params = new URLSearchParams();
+      params.set('path', path);
+      if (ctx.episode) params.set('episode', String(ctx.episode));
+      if (ctx.season) params.set('season', String(ctx.season));
+      const downloadProxy = this.publicBaseUrl + '/v1/external/subtitles/file?' + params.toString();
 
       return {
         IDSubtitle: id,
@@ -103,7 +122,7 @@ export class Subdl {
     }).filter(Boolean);
   }
 
-  async fetchSrt(zipPath) {
+  async fetchSrt(zipPath, context) {
     if (!zipPath) throw new HttpError(400, 'Empty SubDL path');
     const url = /^https?:\/\//i.test(zipPath) ? zipPath : DOWNLOAD_HOST + (zipPath.startsWith('/') ? '' : '/') + zipPath;
 
@@ -122,18 +141,53 @@ export class Subdl {
 
     const zip = new AdmZip(buffer);
     const entries = zip.getEntries().filter((e) => !e.isDirectory);
+    const ctx = context || {};
 
-    const srt = entries.find((e) => /\.srt$/i.test(e.entryName));
-    if (srt) return srt.getData().toString('utf8');
+    const srtEntries = entries.filter((e) => /\.srt$/i.test(e.entryName));
+    if (srtEntries.length) {
+      const pick = pickEpisodeEntry(srtEntries, ctx.season, ctx.episode);
+      return pick.getData().toString('utf8');
+    }
 
-    const vtt = entries.find((e) => /\.vtt$/i.test(e.entryName));
-    if (vtt) return vtt.getData().toString('utf8');
+    const vttEntries = entries.filter((e) => /\.vtt$/i.test(e.entryName));
+    if (vttEntries.length) {
+      const pick = pickEpisodeEntry(vttEntries, ctx.season, ctx.episode);
+      return pick.getData().toString('utf8');
+    }
 
-    const ass = entries.find((e) => /\.(ass|ssa)$/i.test(e.entryName));
-    if (ass) return convertAssToSrt(ass.getData().toString('utf8'));
+    const assEntries = entries.filter((e) => /\.(ass|ssa)$/i.test(e.entryName));
+    if (assEntries.length) {
+      const pick = pickEpisodeEntry(assEntries, ctx.season, ctx.episode);
+      return convertAssToSrt(pick.getData().toString('utf8'));
+    }
 
     throw new HttpError(502, 'No supported subtitle file inside SubDL archive');
   }
+}
+
+function pickEpisodeEntry(entries, season, episode) {
+  if (!entries || !entries.length) return null;
+  if (entries.length === 1 || !episode) return entries[0];
+
+  const ep = String(episode).padStart(2, '0');
+  const se = season ? String(season).padStart(2, '0') : null;
+
+  const exactSe = entries.find((e) => se && new RegExp(`s${se}\\s*e${ep}\\b`, 'i').test(e.entryName));
+  if (exactSe) return exactSe;
+
+  const exactEp = entries.find((e) => new RegExp(`(?:^|[^\\d])(?:s\\d{1,2}\\s*)?e${ep}(?!\\d)`, 'i').test(e.entryName));
+  if (exactEp) return exactEp;
+
+  const seriesPattern = entries.find((e) => new RegExp(`\\b\\d{1,2}x${ep}\\b`, 'i').test(e.entryName));
+  if (seriesPattern) return seriesPattern;
+
+  const numberOnly = entries.find((e) => {
+    const match = e.entryName.match(/(?:^|[^\d])(\d{2,3})(?:[^\d]|$)/);
+    return match && Number(match[1]) === Number(episode);
+  });
+  if (numberOnly) return numberOnly;
+
+  return entries[0];
 }
 
 function assTimeToSrt(t) {

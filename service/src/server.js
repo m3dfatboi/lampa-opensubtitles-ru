@@ -130,7 +130,10 @@ export function createServer(service, bot, config, subdl) {
           episode: params.episode || '',
           languages
         });
-        jsonResponse(res, 200, subdl.toOpenSubtitlesShape(items), CORS);
+        jsonResponse(res, 200, subdl.toOpenSubtitlesShape(items, {
+          season: params.season || '',
+          episode: params.episode || ''
+        }), CORS);
         return;
       }
 
@@ -144,7 +147,10 @@ export function createServer(service, bot, config, subdl) {
           jsonResponse(res, 400, { message: 'path required' }, CORS);
           return;
         }
-        const text = await subdl.fetchSrt(path);
+        const text = await subdl.fetchSrt(path, {
+          season: url.searchParams.get('season') || '',
+          episode: url.searchParams.get('episode') || ''
+        });
         res.writeHead(200, {
           ...CORS,
           'Content-Type': 'application/x-subrip; charset=utf-8'
