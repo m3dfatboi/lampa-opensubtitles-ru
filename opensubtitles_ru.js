@@ -788,7 +788,18 @@
         for (var i = 0; i < items.length; i++) {
             var item = items[i];
             if (!item || !item.IDSubtitleFile) continue;
-            var url = item.SubDownloadLink || ('https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile + '.srt');
+            var source = item._source || 'opensubtitles';
+            var url;
+            if (source === 'subdl') {
+                url = item.SubDownloadLink || '';
+            }
+            else {
+                // rest.opensubtitles.org отдаёт .gz, который Lampa.Reguest читает как мусор и
+                // парсер выдаёт "Файл субтитров пустой или не распознан". Поэтому всегда тянем
+                // через Stremio CDN — там тот же файл, распакованный и нормализованный в UTF-8.
+                url = 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/' + item.IDSubtitleFile + '.srt';
+            }
+            if (!url) continue;
             mapped.push({
                 id: item.IDSubtitle || item.IDSubtitleFile,
                 url: url,
@@ -796,10 +807,22 @@
                 SubEncoding: 'utf-8',
                 m: 'i',
                 g: String(parseInt(item.SubDownloadsCnt, 10) || 0),
-                _source: item._source || 'opensubtitles'
+                _source: source
             });
         }
         return mapped;
+    }
+
+    // Stremio-аддон и REST OpenSubtitles возвращают один и тот же саб с разными URL
+    // (например `subs5.strem.io/.../file/123456.srt` vs `subs7.strem.io/.../file/123456.srt`).
+    // Чтобы дедуп их склеил, ключ берём по числовому IDSubtitleFile из URL/id.
+    function subtitleDedupeKey(item, url) {
+        if (item && item._source === 'subdl') return 'subdl|' + url;
+        var fromUrl = String(url || '').match(/\/(?:file|sub|subtitles)\/(\d{3,})/i);
+        if (fromUrl) return 'os|' + fromUrl[1];
+        var rawId = String(item && item.id || '');
+        if (/^\d{3,}$/.test(rawId)) return 'os|' + rawId;
+        return 'url|' + (url || rawId);
     }
 
     function searchFor(data) {
@@ -1060,9 +1083,11 @@
             var url = subtitleDownloadUrl(item && item.url);
 
             if (!url || !matchesLanguage(rawLang, lang)) return;
-            if (seen[url]) return;
 
-            seen[url] = true;
+            var key = subtitleDedupeKey(item, url);
+            if (seen[key]) return;
+
+            seen[key] = true;
 
             mapped.push({
                 stremio: true,
@@ -1141,9 +1166,12 @@
             var url = subtitleDownloadUrl(item && item.url);
             var rank = translationSourceRank(sourceLang, original, target.code);
 
-            if (!url || !sourceLang || sourceLang === target.code || seen[url] || rank >= 999) return;
+            if (!url || !sourceLang || sourceLang === target.code || rank >= 999) return;
 
-            seen[url] = true;
+            var key = subtitleDedupeKey(item, url);
+            if (seen[key]) return;
+
+            seen[key] = true;
             mapped.push({
                 stremio: true,
                 translated: true,
