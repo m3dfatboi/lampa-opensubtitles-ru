@@ -1245,42 +1245,6 @@
         return cues;
     }
 
-    function nativeItemCues(item) {
-        var cues = [];
-        var track = item && (item.track || item.textTrack || item.sourceTrack);
-
-        if (!item) return cues;
-
-        if (item.cues || item.items || item.subtitles) {
-            cues = normalizeCueArray(item.cues || item.items || item.subtitles);
-            if (cues.length) return cues;
-        }
-
-        if (track) {
-            cues = textTrackCues(track);
-            if (cues.length) return cues;
-        }
-
-        if (typeof item.cues !== 'undefined' || typeof item.activeCues !== 'undefined') {
-            cues = textTrackCues(item);
-            if (cues.length) return cues;
-        }
-
-        return cues;
-    }
-
-    function nativeItemText(item) {
-        return item && (item.subtitle_text || item.raw || item.body || item.content || '');
-    }
-
-    function nativeItemUrl(item) {
-        var url = item && (item.url || item.src || item.file || item.path);
-
-        if (!url || /^native:\/\//i.test(url)) return '';
-
-        return url;
-    }
-
     function currentVideoTextTracks() {
         var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
         var tracks = video && video.textTracks;
@@ -1542,111 +1506,6 @@
         });
 
         tracks._opensub_change_hook = PLUGIN_VERSION;
-    }
-
-    function nativeMediaKey() {
-        var data = lastPlayerData || {};
-        var card = activeCard(data);
-        var episode = parseEpisode(data);
-
-        return [
-            card && (card.imdb_id || card.id || card.title || card.name) || '',
-            data.url || data.path || data.fname || data.title || '',
-            episode.season || '',
-            episode.episode || ''
-        ].join('|');
-    }
-
-    function nativeCueFingerprint(cues) {
-        if (!cues || !cues.length) return 'no-cues';
-
-        return [
-            cues.length,
-            cues[0].start,
-            cues[0].end,
-            cues[cues.length - 1].start,
-            cues[cues.length - 1].end,
-            cueTextToPlain(cues[0].text).substring(0, 24),
-            cueTextToPlain(cues[cues.length - 1].text).substring(0, 24)
-        ].join('|');
-    }
-
-    function nativeItemIdentity(item, index, cues) {
-        return [
-            nativeMediaKey(),
-            item && (item.id || item.index || item.label || item.name || item.language || item.lang || item.srclang) || index,
-            nativeCueFingerprint(cues)
-        ].join('|');
-    }
-
-    function readableNativeSource(item) {
-        var cues = nativeItemCues(item);
-        var text = nativeItemText(item);
-        var url = nativeItemUrl(item);
-
-        if (cues.length || text || url) {
-            return {
-                cues: cues,
-                text: text,
-                url: url
-            };
-        }
-
-        return null;
-    }
-
-    function nativeTranslationCandidates(base, card) {
-        if (!translationEnabled()) return [];
-
-        var target = selectedLanguage();
-        var original = originalLanguageCode(card);
-        var sourceItems = Array.prototype.slice.call(base || []).concat(currentVideoTextTracks());
-        var seen = {};
-        var mapped = [];
-
-        sourceItems.forEach(function (item, index) {
-            var sourceLang = itemLanguage(item);
-            var rank = translationSourceRank(sourceLang, original, target.code);
-            var readable;
-            var identity;
-
-            if (!item || isOurSub(item) || !sourceLang || sourceLang === target.code || rank >= 999) return;
-
-            readable = readableNativeSource(item);
-            if (!readable) return;
-
-            identity = nativeItemIdentity(item, index, readable.cues);
-            if (seen[identity]) return;
-
-            seen[identity] = true;
-            mapped.push({
-                stremio: true,
-                translated: true,
-                native: true,
-                source: 'native-subtitles-translated',
-                id: 'native-' + index,
-                url: 'native://subtitles/' + index + '/' + encodeURIComponent(sourceLang),
-                sourceKey: 'native|' + identity,
-                sourceUrl: readable.url,
-                sourceText: readable.text,
-                sourceCues: readable.cues,
-                sourceChars: cuesCharCount(readable.cues) || (readable.text ? readable.text.length : 0),
-                sourceItem: item,
-                sourceLang: sourceLang,
-                targetLang: target.code,
-                lang: target.code,
-                langCode: target.code,
-                rank: rank,
-                score: 100000 - index
-            });
-        });
-
-        mapped.sort(function (a, b) {
-            if (a.rank !== b.rank) return a.rank - b.rank;
-            return b.score - a.score;
-        });
-
-        return mapped.slice(0, 1);
     }
 
     function isOurSub(item) {
@@ -2398,8 +2257,6 @@
 
         var base = normalExistingSubs();
         var nextIndex = 0;
-        var nativeTranslated = [];
-        var externalTranslated = [];
 
         base.forEach(function (item, pos) {
             if (typeof item.index === 'undefined') item.index = pos;
@@ -2407,12 +2264,8 @@
         });
 
         var hasResults = stremioSubs.length > 0;
-
-        nativeTranslated = nativeTranslationCandidates(base, activeCard(lastPlayerData));
-
-        externalTranslated = translatedSubs;
-
-        var hasTranslated = nativeTranslated.length > 0 || externalTranslated.length > 0;
+        var externalTranslated = translatedSubs;
+        var hasTranslated = externalTranslated.length > 0;
 
         if (renderer.current) {
             base.forEach(function (item) {
@@ -2431,11 +2284,6 @@
             });
         }
 
-        nativeTranslated.forEach(function (item) {
-            mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
-            checkServerTranslationCache(item);
-        });
-
         externalTranslated.forEach(function (item) {
             mixed.push(createTranslatedSubtitleItem(item, nextIndex++));
             prefetchTranslationSource(item);
@@ -2451,7 +2299,7 @@
             mixed.push(searchItem());
         }
 
-        logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' nativeTranslated=' + nativeTranslated.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
+        logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
         if (mixed.length) dispatchSubs(mixed);
     }
@@ -3251,8 +3099,6 @@
         var cues = item && item.sourceCues && item.sourceCues.length ? cloneCues(item.sourceCues) : [];
         var rawText = item && item.sourceText || '';
         var sourceUrl = item && item.sourceUrl || '';
-
-        if (!cues.length && item && item.sourceItem) cues = nativeItemCues(item.sourceItem);
 
         if (!cues.length && rawText) cues = parseSubtitles(rawText);
 
