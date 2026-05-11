@@ -1745,20 +1745,9 @@
         return item;
     }
 
-    function separatorItem(title) {
-        return {
-            title: title,
-            separator: true,
-            index: -1,
-            stremio: true,
-            source: 'stremio-opensubtitles',
-            selected: false
-        };
-    }
-
     function searchItem() {
         var item = {
-            title: 'Поиск по другой серии',
+            title: 'Поиск по названию',
             index: -1,
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -1767,7 +1756,7 @@
                 if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
                     Lampa.PlayerVideo.subsview(true);
                 }
-                promptManualOverride();
+                promptTitleSearch();
             }
         };
 
@@ -1789,14 +1778,6 @@
         });
 
         return item;
-    }
-
-    function rangeItems(count, current) {
-        var items = [];
-        for (var i = 1; i <= count; i++) {
-            items.push({ title: String(i), value: i, selected: i === current });
-        }
-        return items;
     }
 
     function returnToController(name) {
@@ -1840,44 +1821,141 @@
         return 'player_panel';
     }
 
-    function promptManualOverride(prevController) {
+    function defaultSearchQuery() {
+        var card = activeCard(lastPlayerData);
+        var title = (card && (card.title || card.name)) || (lastPlayerData && lastPlayerData.title) || '';
+        title = String(title).trim();
+
+        if (isSeries(card, lastPlayerData)) {
+            var auto = parseEpisode(lastPlayerData || {});
+            var season = (manualOverride && manualOverride.season) || auto.season;
+            var episode = (manualOverride && manualOverride.episode) || auto.episode;
+            if (season && episode) {
+                var sePad = function (n) { return String(n).padStart ? String(n).padStart(2, '0') : ('0' + n).slice(-2); };
+                title += ' S' + sePad(season) + 'E' + sePad(episode);
+            }
+        }
+
+        return title;
+    }
+
+    function formatSearchResultTitle(item) {
+        var name = (item.MovieName || '').trim();
+        var year = (item.MovieYear || '').trim();
+        var release = (item.MovieReleaseName || '').trim();
+        var head = name + (year ? ' (' + year + ')' : '');
+        if (release) head += ' · ' + release;
+        return head || 'Без названия';
+    }
+
+    function formatSearchResultSubtitle(item) {
+        var parts = [];
+        if (item.SubLanguageID) parts.push(item.SubLanguageID);
+        if (item.SubFormat) parts.push(item.SubFormat.toUpperCase());
+        if (item.SubDownloadsCnt) parts.push(item.SubDownloadsCnt + ' скачиваний');
+        return parts.join(' · ');
+    }
+
+    function searchSubtitlesByText(query, prevController) {
+        var lang = selectedLanguage();
+        var url = 'https://rest.opensubtitles.org/search/query-' + encodeURIComponent(query) + '/sublanguageid-' + lang.code;
+        var net = new Lampa.Reguest();
+
+        notify(PLUGIN_TITLE + ': ищу «' + query + '»...');
+        logDebug('title search', url);
+
+        net.timeout(15000);
+        net.silent(url, function (items) {
+            if (!Array.isArray(items) || !items.length) {
+                notify(PLUGIN_TITLE + ': ничего не найдено');
+                returnToController(prevController);
+                return;
+            }
+
+            showSearchResults(items, query, prevController);
+        }, function (xhr) {
+            logDebug('title search error', xhr && xhr.status);
+            notify(PLUGIN_TITLE + ': ошибка поиска');
+            returnToController(prevController);
+        });
+    }
+
+    function showSearchResults(items, query, prevController) {
         if (!Lampa.Select || !Lampa.Select.show) return;
+
+        var picker = items.filter(function (item) {
+            return item && item.IDSubtitleFile;
+        }).slice(0, 50).map(function (item) {
+            return {
+                title: formatSearchResultTitle(item),
+                subtitle: formatSearchResultSubtitle(item),
+                value: item
+            };
+        });
+
+        if (!picker.length) {
+            notify(PLUGIN_TITLE + ': ничего не найдено');
+            returnToController(prevController);
+            return;
+        }
+
+        Lampa.Select.show({
+            title: 'Найдено для «' + query + '»',
+            items: picker,
+            onBack: function () { returnToController(prevController); },
+            onSelect: function (chosen) {
+                returnToController(prevController);
+                loadSearchedSubtitle(chosen.value);
+            }
+        });
+    }
+
+    function loadSearchedSubtitle(restItem) {
+        var mapped = mapRestItems([restItem]);
+        if (!mapped.length) {
+            notify(PLUGIN_TITLE + ': не удалось открыть субтитр');
+            return;
+        }
+
+        var raw = mapped[0];
+        var sub = {
+            stremio: true,
+            source: 'stremio-opensubtitles',
+            index: 999,
+            language: raw.lang || selectedLanguage().code,
+            label: PLUGIN_TITLE + ' · поиск',
+            title: PLUGIN_TITLE + ' · поиск',
+            url: raw.url
+        };
+
+        notify(PLUGIN_TITLE + ': загружаю выбранный субтитр...');
+        renderer.select(sub);
+    }
+
+    function promptTitleSearch(prevController) {
+        if (!Lampa.Input || typeof Lampa.Input.edit !== 'function') {
+            notify(PLUGIN_TITLE + ': поиск недоступен на этой версии Lampa');
+            return;
+        }
 
         if (!prevController) prevController = captureController();
 
-        var card = activeCard(lastPlayerData);
-        var auto = parseEpisode(lastPlayerData || {});
-        var currentSeason = (manualOverride && manualOverride.season) || auto.season || 1;
-        var currentEpisode = (manualOverride && manualOverride.episode) || auto.episode || 1;
-        var maxSeason = Math.max(card && card.number_of_seasons || 0, 25, currentSeason);
-        var maxEpisode = Math.max(currentEpisode + 50, 100);
+        var defaultQuery = defaultSearchQuery();
 
-        Lampa.Select.show({
-            title: 'Выберите сезон',
-            items: rangeItems(maxSeason, currentSeason),
-            onBack: function () { returnToController(prevController); },
-            onSelect: function (seasonItem) {
-                Lampa.Select.show({
-                    title: 'Сезон ' + seasonItem.value + ' — выберите серию',
-                    items: rangeItems(maxEpisode, currentEpisode),
-                    onBack: function () { promptManualOverride(prevController); },
-                    onSelect: function (episodeItem) {
-                        returnToController(prevController);
-
-                        manualOverride = {
-                            type: 'series',
-                            season: seasonItem.value,
-                            episode: episodeItem.value
-                        };
-
-                        logDebug('manual override', manualOverride);
-
-                        notify('Поиск ' + selectedLanguage().name + ' для S' + seasonItem.value + 'E' + episodeItem.value + '...');
-
-                        if (lastPlayerData) searchFor(lastPlayerData);
-                    }
-                });
+        Lampa.Input.edit({
+            title: 'Поиск субтитров',
+            value: defaultQuery,
+            free: true,
+            nosave: true
+        }, function (query) {
+            query = String(query || '').trim();
+            if (!query) {
+                returnToController(prevController);
+                return;
             }
+            searchSubtitlesByText(query, prevController);
+        }, function () {
+            returnToController(prevController);
         });
     }
 
@@ -2390,10 +2468,7 @@
             if (status) mixed.push(status);
         }
 
-        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            mixed.push(separatorItem(PLUGIN_TITLE));
-            mixed.push(searchItem());
-        }
+        mixed.push(searchItem());
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' nativeTranslated=' + nativeTranslated.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
