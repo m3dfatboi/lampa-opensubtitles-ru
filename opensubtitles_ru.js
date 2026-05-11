@@ -1908,17 +1908,7 @@
         });
     }
 
-    function runTitleSearch() {
-        if (!Lampa.Select || !Lampa.Select.show) return;
-
-        var prevController = captureController();
-        var query = defaultSearchQuery();
-
-        if (!query) {
-            notify(PLUGIN_TITLE + ': нет названия для поиска');
-            return;
-        }
-
+    function performTitleSearch(query, prevController) {
         var lang = selectedLanguage();
         var url = 'https://rest.opensubtitles.org/search/query-' + encodeURIComponent(query) + '/sublanguageid-' + lang.code;
         var net = new Lampa.Reguest();
@@ -1939,6 +1929,114 @@
             notify(PLUGIN_TITLE + ': ошибка поиска');
             returnToController(prevController);
         });
+    }
+
+    function ensureSearchInputStyles() {
+        if (typeof document === 'undefined' || !document.head) return;
+        if (document.getElementById('opensubtitles-ru-search-input-styles')) return;
+
+        var style = document.createElement('style');
+        style.id = 'opensubtitles-ru-search-input-styles';
+        style.textContent =
+            '.opensubtitles-ru-search-overlay{' +
+                'position:fixed;inset:0;z-index:2147483647;' +
+                'background:rgba(0,0,0,0.78);' +
+                'display:flex;align-items:center;justify-content:center;' +
+                'animation:opensubtitles-status-fade 0.18s ease-out;' +
+            '}' +
+            '.opensubtitles-ru-search-modal{' +
+                'background:#1a1f2b;color:#fff;border-radius:0.6em;' +
+                'padding:1.8em 2em;min-width:24em;max-width:90vw;' +
+                'box-shadow:0 1.5em 4em rgba(0,0,0,0.6);' +
+            '}' +
+            '.opensubtitles-ru-search-modal h3{' +
+                'margin:0 0 1em;font-size:1.2em;font-weight:600;' +
+            '}' +
+            '.opensubtitles-ru-search-modal input{' +
+                'width:100%;box-sizing:border-box;' +
+                'padding:0.7em 0.9em;font-size:1.05em;' +
+                'background:#0e1118;color:#fff;border:0.1em solid #2a3142;' +
+                'border-radius:0.35em;outline:none;' +
+            '}' +
+            '.opensubtitles-ru-search-modal input:focus{border-color:#7cc4ff}' +
+            '.opensubtitles-ru-search-buttons{' +
+                'display:flex;gap:0.6em;justify-content:flex-end;margin-top:1.2em;' +
+            '}' +
+            '.opensubtitles-ru-search-buttons button{' +
+                'padding:0.55em 1.4em;font-size:1em;' +
+                'border:0;border-radius:0.35em;cursor:pointer;' +
+                'background:#2a3142;color:#fff;' +
+            '}' +
+            '.opensubtitles-ru-search-buttons button.primary{' +
+                'background:#3b82f6;' +
+            '}';
+        document.head.appendChild(style);
+    }
+
+    function showTitleSearchInput(prevController) {
+        if (typeof document === 'undefined' || !document.body) return;
+
+        ensureSearchInputStyles();
+
+        var overlay = document.createElement('div');
+        overlay.className = 'opensubtitles-ru-search-overlay';
+        overlay.innerHTML =
+            '<div class="opensubtitles-ru-search-modal">' +
+                '<h3>Поиск субтитров по названию</h3>' +
+                '<input type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">' +
+                '<div class="opensubtitles-ru-search-buttons">' +
+                    '<button class="cancel">Отмена</button>' +
+                    '<button class="primary">Искать</button>' +
+                '</div>' +
+            '</div>';
+
+        var input = overlay.querySelector('input');
+        var btnGo = overlay.querySelector('button.primary');
+        var btnCancel = overlay.querySelector('button.cancel');
+
+        input.value = defaultSearchQuery();
+        document.body.appendChild(overlay);
+
+        try { input.focus(); input.select(); }
+        catch (e) {}
+
+        var closed = false;
+        function close(query) {
+            if (closed) return;
+            closed = true;
+            try { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+            catch (e) {}
+            document.removeEventListener('keydown', onKey, true);
+
+            if (query) performTitleSearch(query, prevController);
+            else returnToController(prevController);
+        }
+
+        function onKey(e) {
+            if (e.key === 'Escape' || e.keyCode === 27 || e.keyCode === 8) {
+                e.preventDefault();
+                e.stopPropagation();
+                close(null);
+            }
+            else if (e.key === 'Enter' || e.keyCode === 13) {
+                e.preventDefault();
+                e.stopPropagation();
+                close(String(input.value || '').trim());
+            }
+        }
+
+        btnGo.addEventListener('click', function () { close(String(input.value || '').trim()); });
+        btnCancel.addEventListener('click', function () { close(null); });
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) close(null);
+        });
+        document.addEventListener('keydown', onKey, true);
+    }
+
+    function runTitleSearch() {
+        if (!Lampa.Select || !Lampa.Select.show) return;
+        var prevController = captureController();
+        showTitleSearchInput(prevController);
     }
 
     function statusSubtitle(index) {
