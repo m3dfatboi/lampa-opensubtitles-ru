@@ -45,21 +45,53 @@ export class Subdl {
   async search(params) {
     if (!this.isConfigured()) return [];
 
-    const url = new URL(SEARCH_URL);
-    url.searchParams.set('api_key', this.apiKey);
-    url.searchParams.set('subs_per_page', '30');
-
-    if (params.imdb_id) url.searchParams.set('imdb_id', String(params.imdb_id));
-    else if (params.tmdb_id) url.searchParams.set('tmdb_id', String(params.tmdb_id));
-    else if (params.query) url.searchParams.set('film_name', String(params.query));
-    else return [];
-
-    if (params.season) url.searchParams.set('season_number', String(params.season));
-    if (params.episode) url.searchParams.set('episode_number', String(params.episode));
+    const identifiers = [];
+    if (params.imdb_id) identifiers.push({ key: 'imdb_id', value: params.imdb_id });
+    if (params.tmdb_id) identifiers.push({ key: 'tmdb_id', value: params.tmdb_id });
+    if (params.query) identifiers.push({ key: 'film_name', value: params.query });
+    if (!identifiers.length) return [];
 
     const languages = (params.languages || [])
       .map(toIso639_1Upper)
       .filter(Boolean);
+
+    let subs = [];
+    // На SubDL аниме часто заведено под отдельным IMDb id для каждого сезона, поэтому
+    // если запрос по imdb_id вернул пусто — повторяем с tmdb_id, а затем с названием.
+    for (const id of identifiers) {
+      const fetched = await this.fetchSubtitles(id.key, id.value, params, languages);
+      if (fetched.length) {
+        subs = fetched;
+        break;
+      }
+    }
+
+    if (params.episode && subs.length) {
+      const wantEp = Number(params.episode);
+      const wantSe = Number(params.season || 0);
+      const filtered = subs.filter((s) => {
+        const ep = s.episode;
+        const se = s.season;
+        if (wantSe && se != null && se !== '' && Number(se) !== wantSe) return false;
+        if (ep == null || ep === '') return true;
+        return Number(ep) === wantEp;
+      });
+      // Если фильтр по сезону/эпизоду всё выкинул, оставляем хотя бы то что нашли —
+      // на SubDL у аниме часто странная нумерация сезонов, лучше показать что есть.
+      subs = filtered.length ? filtered : subs;
+    }
+
+    return subs;
+  }
+
+  async fetchSubtitles(identifierKey, identifierValue, params, languages) {
+    const url = new URL(SEARCH_URL);
+    url.searchParams.set('api_key', this.apiKey);
+    url.searchParams.set('subs_per_page', '30');
+    url.searchParams.set(identifierKey, String(identifierValue));
+
+    if (params.season) url.searchParams.set('season_number', String(params.season));
+    if (params.episode) url.searchParams.set('episode_number', String(params.episode));
     if (languages.length) url.searchParams.set('languages', languages.join(','));
 
     const controller = new AbortController();
@@ -76,21 +108,7 @@ export class Subdl {
     }
 
     if (!json || json.status !== true) return [];
-    let subs = Array.isArray(json.subtitles) ? json.subtitles : [];
-
-    if (params.episode) {
-      const wantEp = Number(params.episode);
-      const wantSe = Number(params.season || 0);
-      subs = subs.filter((s) => {
-        const ep = s.episode;
-        const se = s.season;
-        if (wantSe && se != null && se !== '' && Number(se) !== wantSe) return false;
-        if (ep == null || ep === '') return true;
-        return Number(ep) === wantEp;
-      });
-    }
-
-    return subs;
+    return Array.isArray(json.subtitles) ? json.subtitles : [];
   }
 
   toOpenSubtitlesShape(items, context) {

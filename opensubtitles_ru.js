@@ -866,8 +866,34 @@
             var request = stremioRequestId(card, data, imdb);
 
             if (!request) {
+                // Без IMDb Stremio-аддоны и REST OpenSubtitles не работают, но SubDL умеет
+                // искать по tmdb_id/названию. Дёрнем его напрямую, если есть что искать.
+                var hasFallbackId = card && (card.id || card.name || card.original_name || card.title || card.original_title);
+                var auto = parseEpisode(data || {});
+                var hasEpisode = (manualOverride && manualOverride.season && manualOverride.episode) || (auto.season && auto.episode);
+
+                if (hasFallbackId && (hasEpisode || !isSeries(card, data))) {
+                    logDebug('search without IMDb, trying SubDL only');
+                    fetchFromSubdl(card, null, function (extra) {
+                        if (playerId !== activePlayerId) return;
+                        stremioSubs = mapStremioResults(extra || []);
+                        translatedSubs = mapTranslationCandidates(extra || [], card);
+                        searchState = stremioSubs.length || translatedSubs.length ? 'ready' : 'empty';
+                        installToPanel();
+                        if (manualOverride) {
+                            if (stremioSubs.length) notify('Найдено ' + stremioSubs.length + ' субтитров');
+                            else if (translatedSubs.length) notify(selectedLanguage().name + ' не найдены, доступен автоперевод с ' + languageName(translatedSubs[0].sourceLang));
+                            else notify(selectedLanguage().name + ' не найдены для S' + manualOverride.season + 'E' + manualOverride.episode);
+                        }
+                    });
+                    return;
+                }
+
                 searchState = isSeries(card, data) ? 'no-episode' : 'no-imdb';
                 installToPanel();
+                if (manualOverride) {
+                    notify(PLUGIN_TITLE + ': не удалось определить шоу для поиска');
+                }
                 return;
             }
 
@@ -977,6 +1003,29 @@
         var season = parts[1] || '';
         var episode = parts[2] || '';
 
+        // Если в request не было сезона/эпизода (например IMDb не нашли — request=null),
+        // подтягиваем из ручного override или из данных плеера.
+        if (!season || !episode) {
+            if (manualOverride) {
+                season = season || manualOverride.season || '';
+                episode = episode || manualOverride.episode || '';
+            }
+            if (!season || !episode) {
+                var auto = parseEpisode(lastPlayerData || {});
+                season = season || (auto.season || '');
+                episode = episode || (auto.episode || '');
+            }
+        }
+
+        var tmdbId = (card && card.id) || '';
+        var queryTitle = (card && (card.name || card.original_name || card.title || card.original_title)) || '';
+
+        if (!imdbId && !tmdbId && !queryTitle) {
+            logDebug('subdl fallback skipped — no imdb/tmdb/title');
+            done([]);
+            return;
+        }
+
         var target = selectedLanguage();
         var sourceLang = effectiveSourceLanguage(originalLanguageCode(card));
         var seen = {};
@@ -986,14 +1035,19 @@
             return true;
         });
 
-        var qs = 'imdb_id=' + encodeURIComponent(imdbId) +
-            '&languages=' + encodeURIComponent(langs.join(','));
+        // Передаём все идентификаторы, которые есть. Сервер выберет imdb_id → tmdb_id → query
+        // в этом порядке, и сам автоматически попробует tmdb_id если imdb_id ничего не вернул.
+        var qs = 'languages=' + encodeURIComponent(langs.join(','));
+        if (imdbId) qs += '&imdb_id=' + encodeURIComponent(imdbId);
+        if (tmdbId) qs += '&tmdb_id=' + encodeURIComponent(tmdbId);
+        if (queryTitle) qs += '&query=' + encodeURIComponent(queryTitle);
         if (season) qs += '&season=' + encodeURIComponent(season);
         if (episode) qs += '&episode=' + encodeURIComponent(episode);
 
         logDebug('subdl fallback request', qs);
 
         serviceRequest('/v1/external/subtitles/search?' + qs, false, function (items) {
+            logDebug('subdl fallback returned', Array.isArray(items) ? items.length : 0, 'items');
             if (!Array.isArray(items) || !items.length) return done([]);
             done(mapRestItems(items));
         }, function (xhr) {
