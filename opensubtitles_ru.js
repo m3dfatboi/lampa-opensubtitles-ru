@@ -1420,6 +1420,45 @@
         catch (e) {}
     }
 
+    function disableWebosNativeSubtitles() {
+        if (!Lampa.Platform || typeof Lampa.Platform.is !== 'function' || !Lampa.Platform.is('webos')) return;
+
+        var video = Lampa.PlayerVideo && Lampa.PlayerVideo.video ? Lampa.PlayerVideo.video() : null;
+        if (!video) return;
+
+        try {
+            var subs = video.webos_subs;
+            if (subs && subs.length) {
+                for (var i = 0; i < subs.length; i++) {
+                    try { subs[i].selected = false; }
+                    catch (e) {}
+                }
+                for (var j = 0; j < subs.length; j++) {
+                    if (subs[j] && subs[j].index === -1) {
+                        try { subs[j].mode = 'showing'; }
+                        catch (e) {}
+                        try { subs[j].selected = true; }
+                        catch (e) {}
+                        break;
+                    }
+                }
+            }
+        }
+        catch (e) {}
+
+        try {
+            if (typeof window !== 'undefined' && window.webOS && window.webOS.service && video.mediaId) {
+                window.webOS.service.request('luna://com.webos.media', {
+                    method: 'setSubtitleEnable',
+                    parameters: { mediaId: video.mediaId, enable: false },
+                    onSuccess: function () {},
+                    onFailure: function () {}
+                });
+            }
+        }
+        catch (e) {}
+    }
+
     function silenceNativeTextTracks() {
         var tracks = currentVideoTextTracks();
         for (var i = 0; i < tracks.length; i++) {
@@ -1710,6 +1749,7 @@
                     renderer.disable();
                 }
                 silenceNativeTextTracks();
+                disableWebosNativeSubtitles();
                 if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.subsview === 'function') {
                     try { Lampa.PlayerVideo.subsview(false); }
                     catch (e) {}
