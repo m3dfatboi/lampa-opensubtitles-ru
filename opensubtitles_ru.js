@@ -2391,7 +2391,6 @@
         }
 
         if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            mixed.push(separatorItem(PLUGIN_TITLE));
             mixed.push(searchItem());
         }
 
