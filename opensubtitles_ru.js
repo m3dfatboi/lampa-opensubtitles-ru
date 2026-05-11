@@ -2027,16 +2027,56 @@
 
         btnGo.addEventListener('click', function () { close(String(input.value || '').trim()); });
         btnCancel.addEventListener('click', function () { close(null); });
-        overlay.addEventListener('click', function (e) {
-            if (e.target === overlay) close(null);
-        });
-        document.addEventListener('keydown', onKey, true);
+
+        setTimeout(function () {
+            if (closed) return;
+            overlay.addEventListener('click', function (e) {
+                if (e.target === overlay) close(null);
+            });
+            document.addEventListener('keydown', onKey, true);
+        }, 300);
+    }
+
+    function tryLampaNativeInput(prevController) {
+        if (!Lampa.Input || typeof Lampa.Input.edit !== 'function') return false;
+
+        var defaultQuery = defaultSearchQuery();
+        var done = false;
+
+        try {
+            Lampa.Input.edit({
+                free: true,
+                title: 'Поиск субтитров',
+                value: defaultQuery,
+                nosave: true
+            }, function (query) {
+                if (done) return;
+                done = true;
+                query = String(query || '').trim();
+                if (query) performTitleSearch(query, prevController);
+                else returnToController(prevController);
+            }, function () {
+                if (done) return;
+                done = true;
+                returnToController(prevController);
+            });
+            return true;
+        }
+        catch (e) {
+            logDebug('Lampa.Input.edit failed', e && e.message);
+            return false;
+        }
     }
 
     function runTitleSearch() {
         if (!Lampa.Select || !Lampa.Select.show) return;
         var prevController = captureController();
-        showTitleSearchInput(prevController);
+
+        setTimeout(function () {
+            if (!tryLampaNativeInput(prevController)) {
+                showTitleSearchInput(prevController);
+            }
+        }, 200);
     }
 
     function statusSubtitle(index) {
