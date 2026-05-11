@@ -661,16 +661,15 @@
     function parseEpisode(data) {
         var season = data && (data.season || data.season_number);
         var episode = data && (data.episode || data.episode_number);
-        var text = [
-            data && data.title,
-            data && data.fname,
-            data && data.path,
-            data && data.url
-        ].join(' ');
+        var titleText = String((data && data.title) || '');
+        var fileText = String((data && (data.fname || data.path || data.url)) || '');
+        // Не дай резрешению вроде "1920x1080" или "1280x720" попасть в матч N×N.
+        var resolutionStripped = (titleText + ' ' + fileText)
+            .replace(/\b\d{3,4}x\d{3,4}\b/gi, ' ');
         var match;
 
         if (!season || !episode) {
-            match = text.match(/[Ss](\d{1,2})[ ._-]*[Ee](\d{1,3})/);
+            match = resolutionStripped.match(/[Ss](\d{1,2})[ ._-]*[Ee](\d{1,3})/);
             if (match) {
                 season = season || parseInt(match[1], 10);
                 episode = episode || parseInt(match[2], 10);
@@ -678,12 +677,39 @@
         }
 
         if (!season || !episode) {
-            match = text.match(/(\d{1,2})x(\d{1,3})/i);
+            match = resolutionStripped.match(/(?:^|[^\d])(\d{1,2})x(\d{1,3})(?!\d)/i);
             if (match) {
                 season = season || parseInt(match[1], 10);
                 episode = episode || parseInt(match[2], 10);
             }
         }
+
+        // Сезон из текста: "Season 3", "3rd Season", "Сезон 3", "S03".
+        if (!season) {
+            match = titleText.match(/(?:season|сезон)\s*(\d{1,2})\b/i)
+                || titleText.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
+                || titleText.match(/(?:^|[^A-Za-z\d])S(\d{1,2})(?:[^A-Za-z\d]|$)/);
+            if (match) {
+                var maybeSeason = parseInt(match[1], 10);
+                if (maybeSeason > 0 && maybeSeason < 30) season = maybeSeason;
+            }
+        }
+
+        // Эпизод из имени файла: "01.mkv", "[Group] 01 [tag].mkv", "Title - 01.mkv", "Title 01v2.mkv".
+        if (!episode) {
+            var basename = fileText.replace(/^.*[\/\\]/, '').replace(/\.[a-z0-9]{2,4}$/i, '');
+            // Сначала убираем все [теги] и (теги), чтобы внутренние числа (1080, 1920, год) не мешали.
+            var stripped = basename.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+            match = stripped.match(/(?:^|[\s_\-.])(\d{1,3})(?:v\d)?(?=[\s_\-.]|$)/);
+            if (match) {
+                var maybeEpisode = parseInt(match[1], 10);
+                if (maybeEpisode > 0 && maybeEpisode < 1000) episode = maybeEpisode;
+            }
+        }
+
+        // Если эпизод нашли, а сезон нет — почти всегда это сезон 1
+        // (для аниме часто нет S01 в названии релиза).
+        if (episode && !season) season = 1;
 
         return {
             season: parseInt(season || 0, 10) || 0,
