@@ -216,6 +216,19 @@ function normalizeChunkItems(chunk, items) {
   });
 }
 
+function isDegenerateOutput(items) {
+  if (!items || items.length < 4) return false;
+  const counts = new Map();
+  for (const item of items) {
+    const text = translatedTextFromItem(item).trim();
+    if (!text) continue;
+    counts.set(text, (counts.get(text) || 0) + 1);
+  }
+  const maxCount = Math.max(0, ...counts.values());
+  // 80% items одинаковые — модель деградировала.
+  return maxCount / items.length >= 0.8;
+}
+
 function translatedCountForChunk(chunk, items) {
   const expected = new Set(chunk.map((item) => String(item.id)));
   let count = 0;
@@ -356,7 +369,9 @@ export class Translator {
       }
       catch (error) {
         lastError = error;
-        if (/обрезал ответ/i.test(error.message || '')) break;
+        // Не пытаемся fallback-моделью: либо ответ обрезан (бессмысленно), либо модель деградировала
+        // (вторая модель скорее всего тоже сломается на тех же данных и сожжёт ещё токенов).
+        if (/обрезал ответ|дегенеративный/i.test(error.message || '')) break;
       }
     }
 
@@ -452,6 +467,13 @@ export class Translator {
 
       if (translatedCountForChunk(chunk, items) < chunk.length) {
         throw new Error(`OpenRouter вернул неполный перевод на части ${chunkIndex} из ${chunkTotal}`);
+      }
+
+      // Защита от деградации модели: если 80%+ items в чанке имеют одинаковый текст,
+      // значит модель срочно сломалась (видели реальный кейс с "Камень" во всех cue).
+      // Кидаем не-сплиттабельную ошибку — split на половинки не поможет.
+      if (isDegenerateOutput(items)) {
+        throw new Error(`OpenRouter вернул дегенеративный перевод на части ${chunkIndex} (модель сломалась). Прерываем чтобы не сжигать токены.`);
       }
 
       return items;

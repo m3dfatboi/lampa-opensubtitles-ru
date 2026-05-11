@@ -283,6 +283,9 @@ export class LampaTranslateService {
 
     if (!cues.length) throw new HttpError(400, 'empty subtitles');
     if (chars > this.config.product.maxSubtitleChars) throw new HttpError(413, 'subtitle file is too large');
+    if (cues.length > this.config.product.maxCues) {
+      throw new HttpError(413, `файл содержит ${cues.length} фрагментов — похоже, это пакет нескольких серий. ИИ-перевод доступен только для одного эпизода.`);
+    }
 
     const cacheKey = this.translator.cacheKey({ cues, rawText, sourceLanguage, targetLanguage });
 

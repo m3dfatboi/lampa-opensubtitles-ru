@@ -111,7 +111,10 @@ export function createConfig(rootDir = process.cwd()) {
       trialCredits: intEnv('TRIAL_CREDITS', 3),
       anonymousFreeTranslations: intEnv('ANONYMOUS_FREE_TRANSLATIONS', 3),
       creditChars: intEnv('CREDIT_CHARS', 10000),
-      maxSubtitleChars: intEnv('MAX_SUBTITLE_CHARS', 250000),
+      // ~80000 chars = один объёмный эпизод. Сезонные паки (8-25 эпизодов) отбиваются.
+      maxSubtitleChars: intEnv('MAX_SUBTITLE_CHARS', 80000),
+      // ~800 cues — почти любой один эпизод аниме/сериала. Пакеты сезонов имеют 3000+.
+      maxCues: intEnv('MAX_CUES', 800),
       maxActiveJobsPerUser: intEnv('MAX_ACTIVE_JOBS_PER_USER', 1),
       chunkMaxCues: intEnv('TRANSLATION_CHUNK_MAX_CUES', 150),
       chunkMaxChars: intEnv('TRANSLATION_CHUNK_MAX_CHARS', 14000),
