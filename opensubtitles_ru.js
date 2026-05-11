@@ -685,9 +685,13 @@
         var season = data && (data.season || data.season_number);
         var episode = data && (data.episode || data.episode_number);
         var titleText = String((data && data.title) || '');
-        var fileText = String((data && (data.fname || data.path || data.url)) || '');
+        // Берём ВСЕ доступные пути одновременно — для многосерийных торрентов сезон
+        // обычно сидит в названии родительского каталога, а fname это просто "01.mkv".
+        var fileSources = [data && data.fname, data && data.path, data && data.url].filter(Boolean);
+        var fileText = fileSources.map(function (s) {
+            try { return decodeURIComponent(String(s)); } catch (e) { return String(s); }
+        }).join(' ');
         try { titleText = decodeURIComponent(titleText); } catch (e) {}
-        try { fileText = decodeURIComponent(fileText); } catch (e) {}
         // Не дай резрешению вроде "1920x1080" или "1280x720" попасть в матч N×N.
         var resolutionStripped = (titleText + ' ' + fileText)
             .replace(/\b\d{3,4}x\d{3,4}\b/gi, ' ');
@@ -710,9 +714,10 @@
         }
 
         // Сезон из текста: "Season 3", "3rd Season", "Сезон 3", "S03".
-        // Смотрим и в title, и в имя файла — для торрентов часто season живёт в URL/пути.
+        // Смотрим и в title, и во ВЕСЬ путь файла — "3rd Season" может сидеть в родительском
+        // каталоге торрента, а в самом .mkv-имени уже только номер эпизода.
         if (!season) {
-            var seasonText = (titleText + ' ' + fileText.replace(/^.*[\/\\]/, ''));
+            var seasonText = titleText + ' ' + fileText;
             match = seasonText.match(/(?:season|сезон)\s*(\d{1,2})\b/i)
                 || seasonText.match(/\b(\d{1,2})(?:st|nd|rd|th)\s*season\b/i)
                 || seasonText.match(/(?:^|[^A-Za-z\d])S(\d{1,2})(?:[^A-Za-z\d]|$)/);
@@ -744,34 +749,44 @@
         };
     }
 
-    // Достаём очищенное имя шоу из имени файла / торрента. Помогает в кейсах, когда
-    // Lampa сматчила контент с не той карточкой TMDB (типичная история для аниме), но
-    // имя файла само по себе содержит полный тайтл шоу.
-    // Файловые источники имеют приоритет над card.title — если у нас есть имя из URL
-    // или fname, оно почти всегда точнее, чем то, что подсунула Lampa.
+    function cleanShowName(text) {
+        var base = String(text || '');
+        base = base.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+        base = base.replace(/\b(?:season|сезон)\s*\d+.*/i, '');
+        base = base.replace(/\b\d{1,2}(?:st|nd|rd|th)\s*season.*/i, '');
+        base = base.replace(/\bs\d{1,2}(?:\s*e\d{1,3})?\b.*/i, '');
+        base = base.replace(/\b\d{1,2}x\d{1,3}\b.*/i, '');
+        base = base.replace(/\bpart\s*\d+\b.*/i, '');
+        base = base.replace(/\s+-\s+\d{1,3}(?:v\d)?(\s.*)?$/i, '');
+        base = base.replace(/\b(720p|1080p|2160p|4k|bdrip|bluray|webrip|webdl|hdtv|hevc|h264|h265|x264|x265|10bit|flac|aac|ac3|dts|multi|dual|dub|sub|raw|ova|oad|movie|complete)\b.*/gi, '');
+        base = base.replace(/\b\d{3,4}x\d{3,4}\b.*/i, '');
+        base = base.replace(/\b(?:19|20)\d{2}\b/g, '');
+        base = base.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
+        base = base.replace(/^[-:\s]+|[-:\s]+$/g, '');
+        if (base.length < 3 || /^\d+$/.test(base)) return '';
+        return base;
+    }
+
+    // Достаём очищенное имя шоу из имени файла / торрента / папки. Помогает в кейсах,
+    // когда Lampa сматчила контент с не той карточкой TMDB (типичная история для аниме):
+    // имя файла либо родительский каталог торрента содержит правильное имя шоу.
     function extractShowFromFilename(data) {
         if (!data) return '';
-        // Порядок важен: файл/путь/url раньше title.
+        // Порядок: файл/путь/url раньше title.
         var sources = [data.fname, data.path, data.url, data.title].filter(Boolean);
         for (var i = 0; i < sources.length; i++) {
             var raw = String(sources[i] || '');
             try { raw = decodeURIComponent(raw); } catch (e) {}
-            var base = raw.replace(/^.*[\/\\]/, '').replace(/\.[a-z0-9]{2,4}$/i, '');
-            base = base.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
-            base = base.replace(/\b(?:season|сезон)\s*\d+.*/i, '');
-            base = base.replace(/\b\d{1,2}(?:st|nd|rd|th)\s*season.*/i, '');
-            base = base.replace(/\bs\d{1,2}(?:\s*e\d{1,3})?\b.*/i, '');
-            base = base.replace(/\b\d{1,2}x\d{1,3}\b.*/i, '');
-            base = base.replace(/\bpart\s*\d+\b.*/i, '');
-            base = base.replace(/\s+-\s+\d{1,3}(?:v\d)?(\s.*)?$/i, '');
-            base = base.replace(/\b(720p|1080p|2160p|4k|bdrip|bluray|webrip|webdl|hdtv|hevc|h264|h265|x264|x265|10bit|flac|aac|ac3|dts|multi|dual|dub|sub|raw|ova|oad|movie|complete)\b.*/gi, '');
-            base = base.replace(/\b\d{3,4}x\d{3,4}\b.*/i, '');
-            base = base.replace(/\b(?:19|20)\d{2}\b/g, '');
-            base = base.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
-            base = base.replace(/^[-:\s]+|[-:\s]+$/g, '');
-            // Файл с одним только номером ("01") — не имя шоу.
-            if (base.length < 3 || /^\d+$/.test(base)) continue;
-            return base;
+            // Разбиваем на сегменты пути и идём от файла к корню — обычно имя шоу в
+            // родительском каталоге, а файл это просто "01.mkv".
+            var segments = raw.split(/[\/\\]/).filter(Boolean);
+            for (var j = segments.length - 1; j >= 0; j--) {
+                var seg = segments[j];
+                // На последнем сегменте отрезаем расширение.
+                if (j === segments.length - 1) seg = seg.replace(/\.[a-z0-9]{2,4}$/i, '');
+                var cleaned = cleanShowName(seg);
+                if (cleaned) return cleaned;
+            }
         }
         return '';
     }
