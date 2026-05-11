@@ -2037,11 +2037,48 @@
         }, 300);
     }
 
+    function isIosPlatform() {
+        try { return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; }
+        catch (e) { return false; }
+    }
+
+    function useLampaNativeInput(prevController) {
+        if (!Lampa.Input || typeof Lampa.Input.edit !== 'function') return false;
+
+        var defaultQuery = defaultSearchQuery();
+        var done = false;
+
+        try {
+            Lampa.Input.edit({
+                free: true,
+                title: 'Поиск субтитров',
+                value: defaultQuery,
+                nosave: true
+            }, function (query) {
+                if (done) return;
+                done = true;
+                query = String(query || '').trim();
+                returnToController(prevController);
+                if (query) performTitleSearch(query, prevController);
+            }, function () {
+                if (done) return;
+                done = true;
+                returnToController(prevController);
+            });
+            return true;
+        }
+        catch (e) {
+            logDebug('Lampa.Input.edit failed', e && e.message);
+            return false;
+        }
+    }
+
     function runTitleSearch() {
         if (!Lampa.Select || !Lampa.Select.show) return;
         var prevController = captureController();
 
         setTimeout(function () {
+            if (!isIosPlatform() && useLampaNativeInput(prevController)) return;
             showTitleSearchInput(prevController);
         }, 200);
     }
