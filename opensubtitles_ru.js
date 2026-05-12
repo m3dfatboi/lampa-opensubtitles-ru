@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v14-anime-torrent-mismatch';
+    var PLUGIN_VERSION = 'v15-title-search';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -914,7 +914,10 @@
                 SubEncoding: 'utf-8',
                 m: 'i',
                 g: String(parseInt(item.SubDownloadsCnt, 10) || 0),
-                _source: source
+                _source: source,
+                // Имя файла и release-метка из SubDL — чтобы пикер мог их показать.
+                release: String(item.MovieReleaseName || '').trim(),
+                filename: String(item.MovieName || '').trim()
             });
         }
         return mapped;
@@ -940,6 +943,25 @@
         translatedSubs = [];
         searchState = 'searching';
         installToPanel();
+
+        // Title-search режим: пользователь нажал "Поиск по названию". Идём только в SubDL
+        // с одним лишь query, без season/episode фильтров — показываем все совпадения.
+        if (manualOverride && manualOverride.type === 'titleSearch') {
+            fetchFromSubdl(card, null, function (extra) {
+                if (playerId !== activePlayerId) return;
+                stremioSubs = mapStremioResults(extra || []);
+                translatedSubs = mapTranslationCandidates(extra || [], card);
+                searchState = stremioSubs.length || translatedSubs.length ? 'ready' : 'empty';
+                installToPanel();
+                if (stremioSubs.length || translatedSubs.length) {
+                    notify('Найдено ' + (stremioSubs.length + translatedSubs.length) + ' субтитров');
+                }
+                else {
+                    notify('Ничего не найдено по "' + manualOverride.query + '"');
+                }
+            });
+            return;
+        }
 
         loadImdbIfNeeded(card, data, function (imdb) {
             if (playerId !== activePlayerId) return;
@@ -1079,16 +1101,19 @@
     }
 
     function fetchFromSubdl(card, request, done) {
+        var titleSearch = manualOverride && manualOverride.type === 'titleSearch';
         var parts = String(request && request.id || '').split(':');
         var imdbId = parts[0] || '';
         var season = parts[1] || '';
         var episode = parts[2] || '';
 
-        // Всегда пытаемся вытащить season/episode из имени файла / override — даже если
-        // Lampa считает контент фильмом. Часто медиатип в Lampa не совпадает с реальным
-        // содержимым торрента (фильм-карточка → файл серии). SubDL устойчив к лишним
-        // season/episode на фильмовых сабах (если у саба нет episode, фильтр его пропустит).
-        if (!season || !episode) {
+        if (titleSearch) {
+            // Title-search режим: показываем ВСЕ сабы по названию, без фильтра по сезону/серии.
+            season = '';
+            episode = '';
+        }
+        else if (!season || !episode) {
+            // Обычный режим: подтягиваем season/episode из override или имени файла.
             if (manualOverride) {
                 season = season || manualOverride.season || '';
                 episode = episode || manualOverride.episode || '';
@@ -1101,12 +1126,9 @@
         }
 
         var tmdbId = (card && card.id) || '';
-        // Берём имя из файла (часто это правильный show name), а если ничего полезного нет —
-        // падаем на card.title/name. Имя из файла часто точнее, если Lampa сматчила контент
-        // с не той карточкой (типичный случай для аниме-релизов).
         var filenameShow = extractShowFromFilename(lastPlayerData);
         var cardTitle = (card && (card.name || card.original_name || card.title || card.original_title)) || '';
-        var queryTitle = filenameShow || cardTitle;
+        var queryTitle = (titleSearch && manualOverride.query) || filenameShow || cardTitle;
 
         if (!imdbId && !tmdbId && !queryTitle) {
             logDebug('subdl fallback skipped — no imdb/tmdb/title');
@@ -1126,20 +1148,20 @@
         // Передаём все идентификаторы, которые есть. Сервер выберет imdb_id → tmdb_id → query
         // в этом порядке, и сам автоматически попробует tmdb_id если imdb_id ничего не вернул.
         var qs = 'languages=' + encodeURIComponent(langs.join(','));
-        if (imdbId) qs += '&imdb_id=' + encodeURIComponent(imdbId);
-        if (tmdbId) qs += '&tmdb_id=' + encodeURIComponent(tmdbId);
+        if (imdbId && !titleSearch) qs += '&imdb_id=' + encodeURIComponent(imdbId);
+        if (tmdbId && !titleSearch) qs += '&tmdb_id=' + encodeURIComponent(tmdbId);
         if (queryTitle) qs += '&query=' + encodeURIComponent(queryTitle);
         if (season) qs += '&season=' + encodeURIComponent(season);
         if (episode) qs += '&episode=' + encodeURIComponent(episode);
 
-        logDebug('subdl fallback request', qs);
+        logDebug('subdl' + (titleSearch ? ' title-search' : ' fallback') + ' request', qs);
 
         serviceRequest('/v1/external/subtitles/search?' + qs, false, function (items) {
-            logDebug('subdl fallback returned', Array.isArray(items) ? items.length : 0, 'items');
+            logDebug('subdl returned', Array.isArray(items) ? items.length : 0, 'items');
             if (!Array.isArray(items) || !items.length) return done([]);
             done(mapRestItems(items));
         }, function (xhr) {
-            logDebug('subdl fallback failed', xhr && xhr.status);
+            logDebug('subdl request failed', xhr && xhr.status);
             done([]);
         }, { token: false });
     }
@@ -1267,7 +1289,9 @@
                 langCode: lang.code,
                 encoding: item.SubEncoding || item.subEncoding || '',
                 match: item.m || '',
-                score: item.g || ''
+                score: item.g || '',
+                release: item.release || '',
+                filename: item.filename || ''
             });
         });
 
@@ -1355,7 +1379,9 @@
                 encoding: item.SubEncoding || item.subEncoding || '',
                 match: item.m || '',
                 score: itemScore(item),
-                rank: rank
+                rank: rank,
+                release: item.release || '',
+                filename: item.filename || ''
             });
         });
 
@@ -1364,7 +1390,9 @@
             return b.score - a.score;
         });
 
-        return mapped.slice(0, 1);
+        // В режиме title-search показываем все кандидаты, в обычном — только лучший.
+        var keepAll = manualOverride && manualOverride.type === 'titleSearch';
+        return keepAll ? mapped : mapped.slice(0, 1);
     }
 
     function cueTimeValue(value, fromSeconds) {
@@ -1863,7 +1891,7 @@
 
     function searchItem() {
         var item = {
-            title: 'Поиск по другой серии',
+            title: 'Поиск по названию',
             index: -1,
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -1872,7 +1900,7 @@
                 if (renderer.current && Lampa.PlayerVideo && Lampa.PlayerVideo.subsview) {
                     Lampa.PlayerVideo.subsview(true);
                 }
-                promptManualOverride();
+                runTitleSearch();
             }
         };
 
@@ -1894,14 +1922,6 @@
         });
 
         return item;
-    }
-
-    function rangeItems(count, current) {
-        var items = [];
-        for (var i = 1; i <= count; i++) {
-            items.push({ title: String(i), value: i, selected: i === current });
-        }
-        return items;
     }
 
     function returnToController(name) {
@@ -1945,45 +1965,22 @@
         return 'player_panel';
     }
 
-    function promptManualOverride(prevController) {
-        if (!Lampa.Select || !Lampa.Select.show) return;
-
-        if (!prevController) prevController = captureController();
-
+    function runTitleSearch() {
         var card = activeCard(lastPlayerData);
-        var auto = parseEpisode(lastPlayerData || {});
-        var currentSeason = (manualOverride && manualOverride.season) || auto.season || 1;
-        var currentEpisode = (manualOverride && manualOverride.episode) || auto.episode || 1;
-        var maxSeason = Math.max(card && card.number_of_seasons || 0, 25, currentSeason);
-        var maxEpisode = Math.max(currentEpisode + 50, 100);
+        var filenameShow = extractShowFromFilename(lastPlayerData);
+        var cardTitle = (card && (card.name || card.original_name || card.title || card.original_title)) || '';
+        var query = filenameShow || cardTitle;
 
-        Lampa.Select.show({
-            title: 'Выберите сезон',
-            items: rangeItems(maxSeason, currentSeason),
-            onBack: function () { returnToController(prevController); },
-            onSelect: function (seasonItem) {
-                Lampa.Select.show({
-                    title: 'Сезон ' + seasonItem.value + ' — выберите серию',
-                    items: rangeItems(maxEpisode, currentEpisode),
-                    onBack: function () { promptManualOverride(prevController); },
-                    onSelect: function (episodeItem) {
-                        returnToController(prevController);
+        if (!query) {
+            notify(PLUGIN_TITLE + ': не удалось определить название для поиска');
+            return;
+        }
 
-                        manualOverride = {
-                            type: 'series',
-                            season: seasonItem.value,
-                            episode: episodeItem.value
-                        };
+        manualOverride = { type: 'titleSearch', query: query };
+        logDebug('title search query', query);
+        notify('Поиск субтитров: ' + query);
 
-                        logDebug('manual override', manualOverride);
-
-                        notify('Поиск ' + selectedLanguage().name + ' для S' + seasonItem.value + 'E' + episodeItem.value + '...');
-
-                        if (lastPlayerData) searchFor(lastPlayerData);
-                    }
-                });
-            }
-        });
+        if (lastPlayerData) searchFor(lastPlayerData);
     }
 
     function statusSubtitle(index) {
@@ -2011,8 +2008,22 @@
         return item && item.origin === 'subdl' ? 'SubDL' : PLUGIN_TITLE;
     }
 
+    // Имя саб-файла из release/filename — то, что пользователь видит на сайте SubDL/OS.
+    // Помогает выбрать правильный саб когда title-search возвращает много вариантов.
+    function subFileLabel(item) {
+        if (!item) return '';
+        var release = String(item.release || '').trim();
+        var filename = String(item.filename || '').trim();
+        // Предпочитаем имя файла, если оно содержит SxxExx или похожий маркер.
+        if (filename && /s\d{1,2}\s*e\d{1,3}/i.test(filename)) return filename;
+        if (release) return release;
+        if (filename) return filename;
+        return '';
+    }
+
     function createSubtitleItem(item, index) {
-        var label = providerName(item);
+        var fileLabel = subFileLabel(item);
+        var label = providerName(item) + (fileLabel ? ' · ' + fileLabel : '');
         var sub = {
             stremio: true,
             source: 'stremio-opensubtitles',
@@ -2077,9 +2088,10 @@
     function createTranslatedSubtitleItem(item, index) {
         var sourceName = languageName(item.sourceLang);
         var target = selectedLanguage();
+        var fileLabel = subFileLabel(item);
         var baseTitle = item.native
             ? 'ИИ перевод встроенных с ' + sourceName
-            : 'ИИ перевод с ' + sourceName + ' (' + providerName(item) + ')';
+            : 'ИИ перевод с ' + sourceName + ' (' + providerName(item) + ')' + (fileLabel ? ' · ' + fileLabel : '');
         var label = baseTitle + translatedItemTitleSuffix(item);
         var sub = {
             stremio: true,
@@ -2491,9 +2503,8 @@
             if (status) mixed.push(status);
         }
 
-        if (isSeries(activeCard(lastPlayerData), lastPlayerData)) {
-            mixed.push(searchItem());
-        }
+        // Кнопка "Поиск по названию" — нужна и для фильмов, и для сериалов.
+        mixed.push(searchItem());
 
         logDebug('install panel: native=' + base.length + ' stremio=' + stremioSubs.length + ' translated=' + translatedSubs.length + ' state=' + searchState);
 
