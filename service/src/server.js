@@ -126,6 +126,7 @@ export function createServer(service, bot, config, subdl) {
           imdb_id: params.imdb_id || '',
           tmdb_id: params.tmdb_id || '',
           query: params.query || '',
+          year: params.year || '',
           season: params.season || '',
           episode: params.episode || '',
           languages

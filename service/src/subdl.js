@@ -113,6 +113,8 @@ export class Subdl {
 
     if (params.season) url.searchParams.set('season_number', String(params.season));
     if (params.episode) url.searchParams.set('episode_number', String(params.episode));
+    // SubDL принимает `year` как мягкую подсказку (не строгий фильтр) — улучшает релевантность.
+    if (params.year) url.searchParams.set('year', String(params.year));
     if (languages.length) url.searchParams.set('languages', languages.join(','));
 
     const controller = new AbortController();
