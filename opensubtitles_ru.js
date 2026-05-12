@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v15-title-search';
+    var PLUGIN_VERSION = 'v16-title-search-both-sources';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -864,6 +864,13 @@
         return 'https://rest.opensubtitles.org/search/imdbid-' + imdbDigits + '/sublanguageid-' + langCode;
     }
 
+    // REST OpenSubtitles по IMDb БЕЗ season/episode — отдаёт ВСЕ субтитры показа сразу.
+    function buildRestUrlByImdb(imdb, langCode) {
+        var digits = String(imdb || '').replace(/^tt/i, '').replace(/\D/g, '');
+        if (!digits) return '';
+        return 'https://rest.opensubtitles.org/search/imdbid-' + digits + '/sublanguageid-' + langCode;
+    }
+
     function subtitleDownloadUrl(url) {
         var value = (url || '').trim();
         var query = '';
@@ -917,7 +924,9 @@
                 _source: source,
                 // Имя файла и release-метка из SubDL — чтобы пикер мог их показать.
                 release: String(item.MovieReleaseName || '').trim(),
-                filename: String(item.MovieName || '').trim()
+                filename: String(item.MovieName || '').trim(),
+                // IMDb который сервер достал через title-резолв (у SubDL результатов).
+                resolvedImdb: String(item._resolved_imdb || '').trim()
             });
         }
         return mapped;
@@ -944,22 +953,68 @@
         searchState = 'searching';
         installToPanel();
 
-        // Title-search режим: пользователь нажал "Поиск по названию". Идём только в SubDL
-        // с одним лишь query, без season/episode фильтров — показываем все совпадения.
+        // Title-search режим: пользователь нажал "Поиск по названию". Идём в SubDL по
+        // названию (он умеет title-резолв и возвращает имя шоу с правильным IMDb), и
+        // дальше тем же IMDb дёргаем REST OpenSubtitles, чтобы добавить ВСЕ сабы шоу.
         if (manualOverride && manualOverride.type === 'titleSearch') {
-            fetchFromSubdl(card, null, function (extra) {
+            var titleQuery = manualOverride.query;
+            var titleLang = selectedLanguage();
+            var titleRaw = [];
+
+            function titleFinalize() {
                 if (playerId !== activePlayerId) return;
-                stremioSubs = mapStremioResults(extra || []);
-                translatedSubs = mapTranslationCandidates(extra || [], card);
+                stremioSubs = mapStremioResults(titleRaw);
+                translatedSubs = mapTranslationCandidates(titleRaw, card);
                 searchState = stremioSubs.length || translatedSubs.length ? 'ready' : 'empty';
                 installToPanel();
                 if (stremioSubs.length || translatedSubs.length) {
                     notify('Найдено ' + (stremioSubs.length + translatedSubs.length) + ' субтитров');
                 }
                 else {
-                    notify('Ничего не найдено по "' + manualOverride.query + '"');
+                    notify('Ничего не найдено по "' + titleQuery + '"');
                 }
+            }
+
+            // Шаг 1: SubDL — отдаст имя шоу и попутно зарезолвит правильный IMDb.
+            fetchFromSubdl(card, null, function (extra) {
+                if (playerId !== activePlayerId) return;
+                if (extra && extra.length) titleRaw = titleRaw.concat(extra);
+                logDebug('title-search SubDL returned', (extra || []).length, 'items');
+
+                // Шаг 2: достаём IMDb из ответа (или card.imdb_id) и дёргаем REST OpenSubtitles.
+                var imdbFromSubdl = '';
+                for (var i = 0; i < (extra || []).length; i++) {
+                    if (extra[i] && extra[i].resolvedImdb) { imdbFromSubdl = extra[i].resolvedImdb; break; }
+                }
+                var imdbForOs = imdbFromSubdl || (card && card.imdb_id) || '';
+
+                if (!imdbForOs) {
+                    titleFinalize();
+                    return;
+                }
+
+                var url = buildRestUrlByImdb(imdbForOs, titleLang.code);
+                if (!url) {
+                    titleFinalize();
+                    return;
+                }
+                logDebug('title-search REST OS by imdb', imdbForOs);
+
+                var net = new Lampa.Reguest();
+                net.timeout(15000);
+                net.silent(url, function (items) {
+                    if (playerId !== activePlayerId) return;
+                    var mapped = mapRestItems(items);
+                    titleRaw = titleRaw.concat(mapped);
+                    logDebug('title-search REST OS returned', mapped.length, 'items');
+                    titleFinalize();
+                }, function (xhr) {
+                    if (playerId !== activePlayerId) return;
+                    logDebug('title-search REST OS error', xhr && xhr.status);
+                    titleFinalize();
+                });
             });
+
             return;
         }
 

@@ -159,7 +159,10 @@ export class Subdl {
         SubDownloadsCnt: String(item.subtitle_downloads || 0),
         SubFormat: 'srt',
         SubDownloadLink: downloadProxy,
-        _source: 'subdl'
+        _source: 'subdl',
+        // Если сервер достал имя шоу через title-резолв — пробрасываем правильный IMDb
+        // обратно в плагин, чтобы он мог дёрнуть им REST OpenSubtitles.
+        _resolved_imdb: item._resolved_imdb || ''
       };
     }).filter(Boolean);
   }
