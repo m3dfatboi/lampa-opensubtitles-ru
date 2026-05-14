@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v20-rest-os-source-lang';
+    var PLUGIN_VERSION = 'v21-title-search-stremio-addon';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -2057,14 +2057,48 @@
 
             if (!imdb) { finalize(); return; }
 
-            // Дёргаем REST OS и для целевого, и для исходного языка. Без второго запроса
-            // OpenSubtitles вообще не попадал бы в ИИ-кандидаты (REST OS принимает один язык
-            // за раз), и юзер видел бы только SubDL переводы.
+            // Stremio-аддон OS использует современный API OpenSubtitles и для свежих
+            // сериалов (Invincible S04 и т.п.) почти всегда имеет сабы, в отличие от
+            // legacy rest.opensubtitles.org. Без него title-search не получает ИИ-кандидатов
+            // от OS на новом контенте и юзер видит только SubDL.
+            // manualOverride сейчас type='titleSearch', stremioRequestId это спутает, поэтому
+            // временно скрываем его, чтобы получить нормальный series/imdb:S:E request.
+            var savedOverride = manualOverride;
+            manualOverride = null;
+            var stremioReq;
+            try { stremioReq = stremioRequestId(card, lastPlayerData, imdb); }
+            finally { manualOverride = savedOverride; }
+
+            var bases = addonBases();
             var sourceLang = effectiveSourceLanguage(originalLanguageCode(card));
             var langsToFetch = [lang.code];
             if (sourceLang && sourceLang !== lang.code) langsToFetch.push(sourceLang);
 
-            var pending = langsToFetch.length;
+            var pending = langsToFetch.length + (stremioReq ? bases.length : 0);
+            if (!pending) { finalize(); return; }
+
+            if (stremioReq) {
+                bases.forEach(function (base) {
+                    var url = buildAddonUrl(base, stremioReq.type, stremioReq.id);
+                    logDebug('title-search Stremio addon', base, stremioReq.type, stremioReq.id);
+
+                    var net = new Lampa.Reguest();
+                    net.timeout(15000);
+                    net.silent(url, function (json) {
+                        var items = json && json.subtitles ? json.subtitles : [];
+                        items.forEach(function (item) { item._addon = base; });
+                        raw = raw.concat(items);
+                        logDebug('title-search Stremio addon returned', items.length, 'items');
+                        if (--pending === 0) finalize();
+                    }, function (xhr) {
+                        logDebug('title-search Stremio addon error', base, xhr && xhr.status);
+                        if (--pending === 0) finalize();
+                    });
+                });
+            }
+
+            // REST OS как fallback — может пригодиться для старого контента, где Stremio-аддон
+            // молчит.
             langsToFetch.forEach(function (langCode) {
                 var url = buildRestUrlByImdb(imdb, langCode);
                 if (!url) { if (--pending === 0) finalize(); return; }
