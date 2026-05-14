@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v19-title-fallback-os-priority';
+    var PLUGIN_VERSION = 'v20-rest-os-source-lang';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -994,13 +994,19 @@
 
             var bases = addonBases();
             var lang = selectedLanguage();
-            var pending = bases.length + 1;
+            // REST OS принимает один язык за раз. Дёргаем И целевой, И исходный,
+            // чтобы у OS было откуда давать ИИ-кандидатов, когда Stremio-аддон
+            // молчит/недоступен. Иначе единственный источник на перевод — SubDL.
+            var sourceLang = effectiveSourceLanguage(originalLanguageCode(card));
+            var restLangs = [lang.code];
+            if (sourceLang && sourceLang !== lang.code) restLangs.push(sourceLang);
+            var pending = bases.length + restLangs.length;
             var rawList = [];
             var anySuccess = false;
             var lastError = null;
             var subdlAttempted = false;
 
-            logDebug('search', request.type, request.id, 'across', bases.length, 'addons + rest.opensubtitles.org');
+            logDebug('search', request.type, request.id, 'across', bases.length, 'addons + rest.opensubtitles.org for langs', restLangs.join(','));
 
             bases.forEach(function (base) {
                 var url = buildAddonUrl(base, request.type, request.id);
@@ -1029,8 +1035,8 @@
                 });
             });
 
-            (function fetchRest() {
-                var url = buildRestUrl(request.type, request.id, lang.code);
+            restLangs.forEach(function (langCode) {
+                var url = buildRestUrl(request.type, request.id, langCode);
                 var net = new Lampa.Reguest();
 
                 net.timeout(15000);
@@ -1041,18 +1047,18 @@
                     var mapped = mapRestItems(items);
                     rawList = rawList.concat(mapped);
 
-                    logDebug('rest.opensubtitles.org returned', mapped.length, 'items for', lang.code);
+                    logDebug('rest.opensubtitles.org returned', mapped.length, 'items for', langCode);
 
                     if (--pending === 0) finalize();
                 }, function (xhr) {
                     if (playerId !== activePlayerId) return;
 
                     lastError = lastError || xhr;
-                    logDebug('rest.opensubtitles.org error', xhr && xhr.status);
+                    logDebug('rest.opensubtitles.org error', langCode, xhr && xhr.status);
 
                     if (--pending === 0) finalize();
                 });
-            })();
+            });
 
             function finalize() {
                 stremioSubs = mapStremioResults(rawList);
