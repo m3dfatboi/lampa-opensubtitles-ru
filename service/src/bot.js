@@ -73,6 +73,32 @@ function safeParseMedia(raw) {
   catch (_) { return {}; }
 }
 
+function filenameFromUrl(url) {
+  if (!url) return '';
+  const clean = String(url).split('?')[0].split('#')[0];
+  const parts = clean.split('/');
+  let last = parts[parts.length - 1] || '';
+  try { last = decodeURIComponent(last); }
+  catch (_) {}
+  last = last.replace(/\.(srt|ass|ssa|vtt|gz|zip)$/i, '').trim();
+  if (/^\d{4,}$/.test(last)) return '';
+  return last;
+}
+
+function resolveDisplayTitle(media, sourceUrl) {
+  const title = String(media.title || '').trim();
+  if (title) return title;
+  const originalTitle = String(media.original_title || '').trim();
+  if (originalTitle) return originalTitle;
+  const subFilename = String(media.subtitle_filename || '').trim();
+  if (subFilename) return subFilename;
+  const urlName = filenameFromUrl(sourceUrl);
+  if (urlName) return urlName;
+  if (media.imdb_id) return `imdb:${media.imdb_id}`;
+  if (media.tmdb_id) return `tmdb:${media.tmdb_id}`;
+  return 'Без названия';
+}
+
 function formatHistoryDate(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -133,7 +159,7 @@ function formatHistoryCredits(row, creditChars) {
 
 function formatHistoryEntry(row, index, creditChars) {
   const media = safeParseMedia(row.media_json);
-  const title = String(media.title || '').trim() || 'Без названия';
+  const title = resolveDisplayTitle(media, row.source_url);
   const originalTitle = String(media.original_title || '').trim();
 
   const meta = [];
@@ -153,8 +179,10 @@ function formatHistoryEntry(row, index, creditChars) {
   const date = formatHistoryDate(row.completed_at || row.created_at);
 
   const second = [langs, credits, date].filter(Boolean).join(' · ');
+  const subFilename = String(media.subtitle_filename || '').trim();
+  const subLine = subFilename && subFilename !== title ? `\n   <i>${escapeHtml(subFilename)}</i>` : '';
 
-  return `${headLine}\n   ${second}`;
+  return `${headLine}${subLine}\n   ${second}`;
 }
 
 function startText() {
@@ -718,7 +746,7 @@ export class TelegramBot {
 
     const isAnonymous = String(user.telegram_id || '').startsWith('anon:');
     const media = safeParseMedia(job.media_json);
-    const title = String(media.title || '').trim() || 'Без названия';
+    const title = resolveDisplayTitle(media, job.source_url);
     const meta = [];
     if (media.type === 'series' && Number(media.season) && Number(media.episode)) {
       meta.push(`S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`);
@@ -738,11 +766,14 @@ export class TelegramBot {
     else userTail = ` · баланс ${user.balance} кр.`;
 
     const tail = meta.length ? ` · ${meta.join(' · ')}` : '';
+    const subFilename = String(media.subtitle_filename || '').trim();
+    const showSubFilename = subFilename && subFilename !== title;
 
     const lines = [
       '<b>Новый перевод</b>',
       formatUserMention(user) + userTail,
       `<b>${escapeHtml(title)}</b>${tail}`,
+      ...(showSubFilename ? [`<i>${escapeHtml(subFilename)}</i>`] : []),
       `${langs} · ${costLabel} · ${Number(job.source_chars) || 0} симв.`
     ];
 

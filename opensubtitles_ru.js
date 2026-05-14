@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v17-title-search-select-dialog';
+    var PLUGIN_VERSION = 'v19-title-fallback-os-priority';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -1381,6 +1381,9 @@
 
         mapped.sort(function (a, b) {
             if (a.rank !== b.rank) return a.rank - b.rank;
+            // При равном языковом ранге предпочитаем OpenSubtitles над SubDL: пользователь
+            // явно просил OS как основной источник, SubDL только когда у OS нечего взять.
+            if (a.origin !== b.origin) return a.origin === 'subdl' ? 1 : -1;
             return b.score - a.score;
         });
 
@@ -2048,20 +2051,30 @@
 
             if (!imdb) { finalize(); return; }
 
-            var url = buildRestUrlByImdb(imdb, lang.code);
-            if (!url) { finalize(); return; }
-            logDebug('title-search REST OS by imdb', imdb);
+            // Дёргаем REST OS и для целевого, и для исходного языка. Без второго запроса
+            // OpenSubtitles вообще не попадал бы в ИИ-кандидаты (REST OS принимает один язык
+            // за раз), и юзер видел бы только SubDL переводы.
+            var sourceLang = effectiveSourceLanguage(originalLanguageCode(card));
+            var langsToFetch = [lang.code];
+            if (sourceLang && sourceLang !== lang.code) langsToFetch.push(sourceLang);
 
-            var net = new Lampa.Reguest();
-            net.timeout(15000);
-            net.silent(url, function (items) {
-                var mapped = mapRestItems(items);
-                raw = raw.concat(mapped);
-                logDebug('title-search REST OS returned', mapped.length, 'items');
-                finalize();
-            }, function (xhr) {
-                logDebug('title-search REST OS error', xhr && xhr.status);
-                finalize();
+            var pending = langsToFetch.length;
+            langsToFetch.forEach(function (langCode) {
+                var url = buildRestUrlByImdb(imdb, langCode);
+                if (!url) { if (--pending === 0) finalize(); return; }
+                logDebug('title-search REST OS by imdb', imdb, langCode);
+
+                var net = new Lampa.Reguest();
+                net.timeout(15000);
+                net.silent(url, function (items) {
+                    var mapped = mapRestItems(items);
+                    raw = raw.concat(mapped);
+                    logDebug('title-search REST OS returned', mapped.length, 'items for', langCode);
+                    if (--pending === 0) finalize();
+                }, function (xhr) {
+                    logDebug('title-search REST OS error', langCode, xhr && xhr.status);
+                    if (--pending === 0) finalize();
+                });
             });
         });
     }
@@ -2236,6 +2249,7 @@
             sourceCues: item.sourceCues,
             sourceChars: item.sourceChars,
             sourceItem: item.sourceItem,
+            subFilename: fileLabel,
             sourceLang: item.sourceLang,
             targetLang: target.code,
             onSelect: function () {
@@ -3185,11 +3199,20 @@
         var series = isSeries(card, lastPlayerData);
         var episode = series ? parseEpisode(lastPlayerData || {}) : { season: 0, episode: 0 };
 
+        // Карточка может быть «голой» (торрент без TMDB, прямое открытие файла) — там нет ни
+        // title/name, ни original_title. Подставляем имя файла, чтобы бот не показывал
+        // «Без названия» в уведомлении админов.
+        var title = (card && (card.title || card.name))
+            || (lastPlayerData && lastPlayerData.title)
+            || (card && (card.original_title || card.original_name))
+            || extractShowFromFilename(lastPlayerData)
+            || '';
+
         return {
             imdb_id: card && card.imdb_id || '',
             tmdb_id: card && card.id || '',
             type: series ? 'series' : 'movie',
-            title: card && (card.title || card.name) || lastPlayerData && lastPlayerData.title || '',
+            title: title,
             original_title: card && (card.original_title || card.original_name) || '',
             original_language: originalLanguageCode(card),
             year: mediaYear(card),
@@ -3308,13 +3331,16 @@
 
     function startServiceTranslation(cacheKey, item, rawText, cues, progress, done, fail) {
         var cached = cachedTranslation(cacheKey);
+        var media = serviceMediaInfo();
+        var subFilename = String(item && item.subFilename || '').trim() || subFileLabel(item);
+        if (subFilename) media.subtitle_filename = subFilename;
         var body = {
             device_id: deviceId(),
             plugin_version: PLUGIN_VERSION,
             source_url: item.sourceUrl || item.sourceKey || item.url,
             source_language: item.sourceLang,
             target_language: item.targetLang || selectedLanguage().code,
-            media: serviceMediaInfo(),
+            media: media,
             subtitle: {
                 text: rawText || '',
                 cues: sourceCuePayload(cues),

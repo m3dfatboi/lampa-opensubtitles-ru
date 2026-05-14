@@ -171,6 +171,161 @@ test('admin notifications skip the acting user and reach other admins', async ()
   assert.match(sent[0].text, /3 кр\./);
 });
 
+test('admin notification includes subtitle filename when client sent it', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: '200', username: 'buyer', first_name: 'Pavel', balance: 30, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 3,
+    source_chars: 25000,
+    media_json: JSON.stringify({
+      title: 'Inception',
+      year: '2010',
+      type: 'movie',
+      subtitle_filename: 'Inception.2010.BluRay.x264.srt'
+    })
+  });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Inception\.2010\.BluRay\.x264\.srt/);
+});
+
+test('admin notification falls back to original_title when localized title is empty', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: '200', first_name: 'Pavel', balance: 0, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 0,
+    source_chars: 25000,
+    media_json: JSON.stringify({ title: '', original_title: 'Slime Datta Ken', type: 'series' })
+  });
+
+  assert.match(sent[0].text, /Slime Datta Ken/);
+  assert.doesNotMatch(sent[0].text, /Без названия/);
+});
+
+test('admin notification falls back to subtitle filename when card has no title at all', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: 'anon:abc', first_name: 'Anonymous', balance: 0, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 0,
+    source_chars: 17802,
+    media_json: JSON.stringify({ subtitle_filename: 'Some.Movie.2024.WEB.srt' })
+  });
+
+  assert.match(sent[0].text, /Some\.Movie\.2024\.WEB\.srt/);
+  assert.doesNotMatch(sent[0].text, /Без названия/);
+  // Файл уже стоит как заголовок — отдельной строкой повторять не надо.
+  assert.equal((sent[0].text.match(/Some\.Movie\.2024\.WEB\.srt/g) || []).length, 1);
+});
+
+test('admin notification derives title from source_url when media is empty', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: 'anon:abc', first_name: 'Anonymous', balance: 0, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 0,
+    source_chars: 17802,
+    source_url: 'https://subdl.com/files/Breaking.Bad.S01E01.720p.WEB.srt',
+    media_json: '{}'
+  });
+
+  assert.match(sent[0].text, /Breaking\.Bad\.S01E01\.720p\.WEB/);
+});
+
+test('admin notification ignores numeric Stremio CDN filenames and falls back further', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: 'anon:abc', first_name: 'Anonymous', balance: 0, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 0,
+    source_chars: 17802,
+    source_url: 'https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/12345678.srt',
+    media_json: JSON.stringify({ imdb_id: 'tt9999999' })
+  });
+
+  // 12345678 — мусорный числовой ID, его не показываем. Должен сработать дальше — imdb_id.
+  assert.match(sent[0].text, /imdb:tt9999999/);
+  assert.doesNotMatch(sent[0].text, /12345678/);
+});
+
+test('admin notification omits subtitle filename line when absent', async () => {
+  const { bot, sent } = createBot({ admins: ['100'] });
+  bot.store.getUserById = () => ({
+    id: 1, telegram_id: '200', username: 'buyer', first_name: 'Pavel', balance: 30, unlimited: 0
+  });
+
+  await bot.notifyAdminsOfTranslation({
+    user_id: 1,
+    source_language: 'eng',
+    target_language: 'rus',
+    credits_spent: 3,
+    source_chars: 25000,
+    media_json: JSON.stringify({ title: 'Inception', year: '2010', type: 'movie' })
+  });
+
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0].text, /\.srt/);
+});
+
+test('history shows subtitle filename when stored', async () => {
+  const rows = [{
+    id: 'job-1',
+    source_language: 'eng',
+    target_language: 'rus',
+    source_chars: 25000,
+    credits_spent: 3,
+    media_json: JSON.stringify({
+      title: 'Breaking Bad',
+      year: '2008',
+      type: 'series',
+      season: 5,
+      episode: 14,
+      subtitle_filename: 'Breaking.Bad.S05E14.720p.WEB.srt'
+    }),
+    completed_at: '2026-05-08T14:32:00.000Z',
+    created_at: '2026-05-08T14:31:00.000Z'
+  }];
+
+  const { bot, sent } = createBot({
+    store: { listUserTranslations: () => rows }
+  });
+
+  await bot.handleMessage({
+    text: 'История',
+    from: { id: 42, username: 'viewer' },
+    chat: { id: 100 }
+  });
+
+  assert.match(sent[0].text, /Breaking\.Bad\.S05E14\.720p\.WEB\.srt/);
+});
+
 test('admin notifications fire for paid orders too', async () => {
   const { bot, sent } = createBot({ admins: ['100'] });
   bot.store.getUserById = () => ({
