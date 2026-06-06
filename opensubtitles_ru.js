@@ -22,7 +22,7 @@
         { code: 'tur', iso2: 'tr', name: 'Türkçe', aliases: ['turkish'] }
     ];
 
-    var PLUGIN_VERSION = 'v21-title-search-stremio-addon';
+    var PLUGIN_VERSION = 'v22-proxy-subtitle-downloads';
     var EXTERNAL_SEARCH_TIMEOUT = 3500;
     var SERVICE_API_BASE = 'https://lampa-subs.194.67.101.239.sslip.io';
     var TELEGRAM_BOT_URL = 'https://t.me/LampaSubsBot';
@@ -872,29 +872,42 @@
         return 'https://rest.opensubtitles.org/search/imdbid-' + digits + '/sublanguageid-' + langCode;
     }
 
-    function subtitleDownloadUrl(url) {
+    function subtitleDirectDownloadUrl(url) {
         var value = (url || '').trim();
         var query = '';
         var hash = '';
         var hashIndex;
         var queryIndex;
 
-        if (!value || /\.srt(?:[?#]|$)/i.test(value)) return value;
-        if (!/subs\d*\.strem\.io\/.*\/file\/[^/?#]+/i.test(value)) return value;
+        if (!value) return value;
 
-        hashIndex = value.indexOf('#');
-        if (hashIndex >= 0) {
-            hash = value.substring(hashIndex);
-            value = value.substring(0, hashIndex);
+        if (!/\.srt(?:[?#]|$)/i.test(value) && /subs\d*\.strem\.io\/.*\/file\/[^/?#]+/i.test(value)) {
+            hashIndex = value.indexOf('#');
+            if (hashIndex >= 0) {
+                hash = value.substring(hashIndex);
+                value = value.substring(0, hashIndex);
+            }
+
+            queryIndex = value.indexOf('?');
+            if (queryIndex >= 0) {
+                query = value.substring(queryIndex);
+                value = value.substring(0, queryIndex);
+            }
+
+            value = value + '.srt' + query + hash;
         }
 
-        queryIndex = value.indexOf('?');
-        if (queryIndex >= 0) {
-            query = value.substring(queryIndex);
-            value = value.substring(0, queryIndex);
+        return value;
+    }
+
+    function subtitleDownloadUrl(url) {
+        var value = subtitleDirectDownloadUrl(url);
+
+        if (/^https?:\/\//i.test(value) && serviceBaseUrl() && value.indexOf(serviceBaseUrl() + '/') !== 0) {
+            return serviceUrl('/v1/external/subtitles/proxy?url=' + encodeURIComponent(value));
         }
 
-        return value + '.srt' + query + hash;
+        return value;
     }
 
     function mapRestItems(items) {
@@ -1270,6 +1283,7 @@
 
         results.forEach(function (item) {
             var rawLang = (item && (item.lang || item.language || item.SubLanguageID || item.iso639)) || '';
+            var directUrl = subtitleDirectDownloadUrl(item && item.url);
             var url = subtitleDownloadUrl(item && item.url);
 
             if (!url || !matchesLanguage(rawLang, lang)) return;
@@ -1285,6 +1299,7 @@
                 origin: item && item._source === 'subdl' ? 'subdl' : 'opensubtitles',
                 id: item.id || url,
                 url: url,
+                directUrl: directUrl,
                 lang: lang.code,
                 langCode: lang.code,
                 encoding: item.SubEncoding || item.subEncoding || '',
@@ -1355,6 +1370,7 @@
 
         results.forEach(function (item) {
             var sourceLang = itemLanguage(item);
+            var directUrl = subtitleDirectDownloadUrl(item && item.url);
             var url = subtitleDownloadUrl(item && item.url);
             var rank = translationSourceRank(sourceLang, original, target.code);
 
@@ -1371,7 +1387,9 @@
                 origin: item && item._source === 'subdl' ? 'subdl' : 'opensubtitles',
                 id: item.id || url,
                 url: url,
+                directUrl: directUrl,
                 sourceUrl: url,
+                directSourceUrl: directUrl,
                 sourceLang: sourceLang,
                 targetLang: target.code,
                 lang: target.code,
@@ -2212,6 +2230,7 @@
             label: label,
             title: label,
             url: item.url,
+            directUrl: item.directUrl,
             onSelect: function () {
                 renderer.select(sub);
             }
@@ -2283,8 +2302,10 @@
             label: label,
             title: label,
             url: item.url,
+            directUrl: item.directUrl,
             sourceKey: item.sourceKey,
             sourceUrl: item.sourceUrl || (item.native ? '' : item.url),
+            directSourceUrl: item.directSourceUrl || item.directUrl,
             sourceText: item.sourceText,
             sourceCues: item.sourceCues,
             sourceChars: item.sourceChars,
@@ -3495,6 +3516,24 @@
         tick();
     }
 
+    function fetchSubtitleText(url, fallbackUrl, done, fail, timeoutMs) {
+        function request(requestUrl, allowFallback) {
+            subtitleNetwork.timeout(timeoutMs || 20000);
+            subtitleNetwork.silent(requestUrl, done, function (xhr) {
+                if (allowFallback && fallbackUrl && fallbackUrl !== requestUrl) {
+                    logDebug('subtitle proxy failed, trying direct url', xhr && xhr.status);
+                    request(fallbackUrl, false);
+                    return;
+                }
+                fail(xhr);
+            }, false, {
+                dataType: 'text'
+            });
+        }
+
+        request(url, true);
+    }
+
     function loadTranslationSource(item, done, fail) {
         var cues = item && item.sourceCues && item.sourceCues.length ? cloneCues(item.sourceCues) : [];
         var rawText = item && item.sourceText || '';
@@ -3515,8 +3554,7 @@
             return;
         }
 
-        subtitleNetwork.timeout(20000);
-        subtitleNetwork.silent(sourceUrl, function (text) {
+        fetchSubtitleText(sourceUrl, item && item.directSourceUrl, function (text) {
             var parsed = parseSubtitles(text || '');
 
             if (!parsed.length) {
@@ -3528,9 +3566,7 @@
                 rawText: text || '',
                 cues: parsed
             });
-        }, fail, false, {
-            dataType: 'text'
-        });
+        }, fail, 20000);
     }
 
     var renderer = {
@@ -3559,8 +3595,7 @@
 
             showSubtitleText('');
 
-            subtitleNetwork.timeout(20000);
-            subtitleNetwork.silent(item.url, function (text) {
+            fetchSubtitleText(item.url, item.directUrl, function (text) {
                 if (self.current !== item) {
                     logDebug('renderer.select fetch ignored: current changed');
                     return;
@@ -3584,9 +3619,7 @@
                 logDebug('renderer.select fetch error', xhr && xhr.status);
                 notify(PLUGIN_TITLE + ': ' + decodeError(xhr));
                 self.disable();
-            }, false, {
-                dataType: 'text'
-            });
+            }, 20000);
         },
         selectTranslated: function (item) {
             var self = this;

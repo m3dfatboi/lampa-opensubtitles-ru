@@ -64,6 +64,52 @@ function paymentPage(title, text) {
 </html>`;
 }
 
+export function isAllowedSubtitleProxyHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return /^subs\d*\.strem\.io$/.test(host) ||
+    host === 'opensubtitles-v3.strem.io' ||
+    host === 'rest.opensubtitles.org' ||
+    host === 'dl.opensubtitles.org' ||
+    host === 'www.opensubtitles.org' ||
+    host === 'api.opensubtitles.com' ||
+    host === 'dl.subdl.com' ||
+    host === 'subdl.com';
+}
+
+async function fetchSubtitleProxy(targetUrl) {
+  let parsed;
+  try {
+    parsed = new URL(String(targetUrl || ''));
+  }
+  catch {
+    throw new HttpError(400, 'bad subtitle url');
+  }
+
+  if (!/^https?:$/.test(parsed.protocol) || !isAllowedSubtitleProxyHost(parsed.hostname)) {
+    throw new HttpError(400, 'subtitle host is not allowed');
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'LampaOpenSubtitles/1.0 (+https://github.com/m3dfatboi/lampa-opensubtitles-ru)',
+        'Accept': 'text/plain, application/x-subrip, */*'
+      }
+    });
+
+    if (!response.ok) throw new HttpError(response.status, `subtitle download HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer()).toString('utf8');
+  }
+  finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createServer(service, bot, config, subdl) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -155,6 +201,22 @@ export function createServer(service, bot, config, subdl) {
         res.writeHead(200, {
           ...CORS,
           'Content-Type': 'application/x-subrip; charset=utf-8'
+        });
+        res.end(text);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/v1/external/subtitles/proxy') {
+        const target = url.searchParams.get('url');
+        if (!target) {
+          jsonResponse(res, 400, { message: 'url required' }, CORS);
+          return;
+        }
+        const text = await fetchSubtitleProxy(target);
+        res.writeHead(200, {
+          ...CORS,
+          'Content-Type': 'application/x-subrip; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400'
         });
         res.end(text);
         return;
